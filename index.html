@@ -1,0 +1,72 @@
+<!-- python -m http.server 5173 --bind 127.0.0.1 -->
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ballfight Arena</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <button id="muteBtn" class="corner-mute" type="button">음소거</button>
+
+      <section id="homeScreen" class="screen home-screen">
+        <p class="eyebrow">AUTO BALL DUEL</p>
+        <h1>Ballfight Arena</h1>
+        <button id="goSelectBtn" class="primary-btn home-start" type="button">시작</button>
+      </section>
+
+      <section id="selectScreen" class="screen select-screen hidden">
+        <header class="panel-head">
+          <div>
+            <p class="eyebrow">CHARACTER SELECT</p>
+            <h1>캐릭터 선택</h1>
+          </div>
+          <button id="backHomeBtn" type="button">뒤로</button>
+        </header>
+
+        <div class="select-grid">
+          <section class="slot" aria-label="character one">
+            <h2>캐릭터 1</h2>
+            <div id="slotOneCards" class="cards"></div>
+          </section>
+          <section class="slot" aria-label="character two">
+            <h2>캐릭터 2</h2>
+            <div id="slotTwoCards" class="cards"></div>
+          </section>
+        </div>
+
+        <button id="launchBtn" class="primary-btn" type="button">결투 시작</button>
+      </section>
+
+      <section id="battleScreen" class="screen battle-screen hidden">
+        <header class="battle-head">
+          <div>
+            <p class="eyebrow">BATTLE</p>
+            <h1 id="matchTitle">김성윤 vs 이지호</h1>
+          </div>
+          <div class="battle-actions">
+            <div class="speed-controls" aria-label="battle speed">
+              <button class="speed-btn active" type="button" data-speed="1">1배</button>
+              <button class="speed-btn" type="button" data-speed="2">2배</button>
+              <button class="speed-btn" type="button" data-speed="4">4배</button>
+            </div>
+            <button id="stopBtn" type="button">중단</button>
+            <button id="restartBtn" type="button">다시하기</button>
+            <button id="resetBtn" type="button">선택으로</button>
+          </div>
+        </header>
+
+        <section class="arena-wrap">
+          <canvas id="arena" width="720" height="720" aria-label="square battle arena"></canvas>
+          <div id="countdown" class="countdown">3</div>
+        </section>
+
+        <section id="scoreboard" class="scoreboard" aria-label="fighter health"></section>
+      </section>
+    </main>
+
+    <script src="game.js"></script>
+  </body>
+</html>
