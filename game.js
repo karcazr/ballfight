@@ -38,6 +38,7 @@ const LSJ_LETTER_INTERVAL = 1;
 const LSJ_BURST_INTERVAL = 0.11;
 const LETTER_PROJECTILE_SPEED = 680;
 const HOMING_PROJECTILE_SPEED = 520;
+const MASTER_VOLUME = 0.42;
 const LEE_ULT_IMMUNITY = 3;
 const BJD_ULT_CAST_TIME = 1;
 const SHANGLIN_BASE_DAMAGE = 20;
@@ -66,7 +67,7 @@ const fighters = {
     maxHp: 300,
     speed: 260,
     auraRadius: 300,
-    skill: "넓은 반경 안에 상대가 없으면 초당 5 회복, 있으면 상대가 초당 5 피해. 이 스킬은 궁극기 게이지 효율이 2배다.",
+    skill: "반경 안의 적에게 초당 5 피해, 적이 없으면 초당 5 회복. 피해로 얻는 궁극기 게이지만 2배.",
     ult: "50의 보호막과 3초 피해 면역을 얻고 중앙에서 경기장 전체에 초당 10 피해, 입힌 피해만큼 체력 회복.",
   },
   bjd: {
@@ -134,23 +135,161 @@ let screenShake = 0;
 let screenFlash = 0;
 let audioCtx = null;
 let masterGain = null;
+let audioCompressor = null;
 let lastSoundAt = {};
 let soundMuted = false;
+let audioUnlockPromise = null;
+const fallbackSoundUrls = {};
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
 const randomAngle = () => Math.random() * Math.PI * 2;
 
 function initAudio() {
-  if (audioCtx) return;
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (audioCtx && audioCtx.state !== "closed") return;
+  audioCtx = null;
+  masterGain = null;
+  audioCompressor = null;
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  audioCtx = new AudioContextClass({ latencyHint: "interactive" });
   masterGain = audioCtx.createGain();
-  masterGain.gain.value = soundMuted ? 0 : 0.22;
-  masterGain.connect(audioCtx.destination);
+  audioCompressor = audioCtx.createDynamicsCompressor();
+  audioCompressor.threshold.value = -18;
+  audioCompressor.knee.value = 12;
+  audioCompressor.ratio.value = 4;
+  audioCompressor.attack.value = 0.003;
+  audioCompressor.release.value = 0.2;
+  masterGain.gain.value = soundMuted ? 0 : MASTER_VOLUME;
+  masterGain.connect(audioCompressor);
+  audioCompressor.connect(audioCtx.destination);
+  audioCtx.onstatechange = () => {
+    document.documentElement.dataset.audioState = audioCtx.state;
+  };
+  document.documentElement.dataset.audioState = audioCtx.state;
 }
 
-function ensureAudio() {
+async function ensureAudio() {
   initAudio();
-  if (audioCtx.state === "suspended") audioCtx.resume();
+  if (!audioCtx) return false;
+  if (audioCtx.state !== "running") {
+    try {
+      await audioCtx.resume();
+    } catch (error) {
+      console.warn("오디오를 활성화하지 못했습니다.", error);
+      return false;
+    }
+  }
+  return audioCtx.state === "running";
+}
+
+function unlockAudio() {
+  if (audioCtx?.state === "running") return Promise.resolve(true);
+  if (!audioUnlockPromise) {
+    audioUnlockPromise = ensureAudio().finally(() => {
+      audioUnlockPromise = null;
+    });
+  }
+  return audioUnlockPromise;
+}
+
+function unlockAudioFromGesture() {
+  initAudio();
+  primeFallbackAudio();
+  if (!audioCtx || !masterGain) return;
+  primeAudioOutput();
+  if (audioCtx.state !== "running") {
+    audioCtx
+      .resume()
+      .then(() => {
+        primeAudioOutput();
+        document.documentElement.dataset.audioState = audioCtx.state;
+      })
+      .catch((error) => console.warn("오디오 출력 장치를 활성화하지 못했습니다.", error));
+  }
+}
+
+function primeFallbackAudio() {
+  if (soundMuted) return;
+  const audio = new Audio(getFallbackSoundUrl("unlock"));
+  audio.volume = 0.01;
+  audio.play().catch(() => {});
+}
+
+function getFallbackSoundUrl(name) {
+  if (fallbackSoundUrls[name]) return fallbackSoundUrls[name];
+  const settings = {
+    unlock: [440, 0.025, 0.01],
+    ui: [620, 0.08, 0.32],
+    countdown: [470, 0.11, 0.42],
+    start: [880, 0.2, 0.45],
+    wall: [180, 0.07, 0.34],
+    collision: [110, 0.14, 0.5],
+    damage: [150, 0.08, 0.36],
+    shieldBreak: [760, 0.2, 0.48],
+    kimSkill: [420, 0.2, 0.4],
+    kimUlt: [90, 0.35, 0.58],
+    leeUlt: [130, 0.45, 0.5],
+    aura: [95, 0.1, 0.22],
+    bjdWave: [75, 0.28, 0.55],
+    bjdUlt: [55, 0.55, 0.62],
+    letter: [900, 0.06, 0.34],
+    letterUlt: [1200, 0.09, 0.42],
+    stun: [680, 0.18, 0.4],
+    unmute: [760, 0.14, 0.36],
+  }[name] || [440, 0.1, 0.32];
+  fallbackSoundUrls[name] = createToneWavUrl(...settings);
+  return fallbackSoundUrls[name];
+}
+
+function createToneWavUrl(frequency, duration, volume) {
+  const sampleRate = 22050;
+  const sampleCount = Math.max(1, Math.floor(sampleRate * duration));
+  const buffer = new ArrayBuffer(44 + sampleCount * 2);
+  const view = new DataView(buffer);
+  const writeText = (offset, text) => {
+    for (let index = 0; index < text.length; index += 1) view.setUint8(offset + index, text.charCodeAt(index));
+  };
+  writeText(0, "RIFF");
+  view.setUint32(4, 36 + sampleCount * 2, true);
+  writeText(8, "WAVEfmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeText(36, "data");
+  view.setUint32(40, sampleCount * 2, true);
+  for (let index = 0; index < sampleCount; index += 1) {
+    const fade = Math.min(1, index / 80, (sampleCount - index) / 180);
+    const sample = Math.sin((Math.PI * 2 * frequency * index) / sampleRate) * volume * fade;
+    view.setInt16(44 + index * 2, sample * 0x7fff, true);
+  }
+  return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+}
+
+function playFallbackSound(name) {
+  if (soundMuted) return;
+  const audio = new Audio(getFallbackSoundUrl(name));
+  document.documentElement.dataset.fallbackSound = name;
+  audio
+    .play()
+    .then(() => {
+      document.documentElement.dataset.fallbackAudio = "playing";
+    })
+    .catch(() => {
+      document.documentElement.dataset.fallbackAudio = "blocked";
+    });
+}
+
+function primeAudioOutput() {
+  if (!audioCtx || !masterGain) return;
+  const buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+  const source = audioCtx.createBufferSource();
+  source.buffer = buffer;
+  source.connect(masterGain);
+  source.start(0);
 }
 
 function playTone({ freq = 440, endFreq = freq, duration = 0.12, type = "sine", volume = 0.5, delay = 0 }) {
@@ -193,7 +332,12 @@ function playNoise({ duration = 0.14, volume = 0.35, filter = 900, delay = 0 }) 
 }
 
 function playSound(name) {
-  if (!audioCtx || soundMuted) return;
+  if (soundMuted) return;
+  if (!audioCtx || audioCtx.state !== "running") {
+    playFallbackSound(name);
+    unlockAudio();
+    return;
+  }
   const nowMs = performance.now();
   const limit = {
     wall: 55,
@@ -245,12 +389,24 @@ function playSound(name) {
     playTone({ freq: 760, endFreq: 180, duration: 0.22, type: "square", volume: 0.18 });
     playTone({ freq: 1220, endFreq: 420, duration: 0.12, type: "triangle", volume: 0.12, delay: 0.02 });
   }
+  if (name === "unmute") {
+    playTone({ freq: 520, endFreq: 760, duration: 0.12, type: "sine", volume: 0.2 });
+    playTone({ freq: 780, endFreq: 980, duration: 0.1, type: "sine", volume: 0.12, delay: 0.06 });
+  }
+  if (name === "ui") playTone({ freq: 460, endFreq: 620, duration: 0.08, type: "sine", volume: 0.16 });
+  if (name === "countdown") playTone({ freq: 520, endFreq: 440, duration: 0.1, type: "triangle", volume: 0.22 });
+  if (name === "start") {
+    playTone({ freq: 420, endFreq: 840, duration: 0.2, type: "sawtooth", volume: 0.2 });
+    playTone({ freq: 660, endFreq: 1120, duration: 0.18, type: "triangle", volume: 0.16, delay: 0.04 });
+  }
 }
 
-function toggleMute() {
+async function toggleMute() {
   soundMuted = !soundMuted;
   muteBtn.textContent = soundMuted ? "소리 켜기" : "음소거";
-  if (masterGain) masterGain.gain.value = soundMuted ? 0 : 0.22;
+  if (!soundMuted) await unlockAudio();
+  if (masterGain) masterGain.gain.setTargetAtTime(soundMuted ? 0 : MASTER_VOLUME, audioCtx.currentTime, 0.01);
+  if (!soundMuted) playSound("unmute");
 }
 
 function showScreen(name) {
@@ -279,6 +435,7 @@ function renderSlot(container, slot) {
       <p>Ult: ${fighter.ult}</p>
     `;
     card.addEventListener("click", () => {
+      playSound("ui");
       selected[slot] = fighter.id;
       renderCharacterSelect();
     });
@@ -327,7 +484,9 @@ function makeBall(fighterId, x, y) {
 }
 
 function startMatch() {
-  ensureAudio();
+  ensureAudio().then((ready) => {
+    if (ready) playSound("countdown");
+  });
   stopAnimation();
   setSimSpeed(1);
   stopBtn.textContent = "중단";
@@ -423,10 +582,16 @@ function resumeCountdown() {
 function scheduleCountdown() {
   countdownTimers = [
     setTimeout(() => {
-      if (state === "countdown") countdownEl.textContent = "2";
+      if (state === "countdown") {
+        countdownEl.textContent = "2";
+        playSound("countdown");
+      }
     }, 1000),
     setTimeout(() => {
-      if (state === "countdown") countdownEl.textContent = "1";
+      if (state === "countdown") {
+        countdownEl.textContent = "1";
+        playSound("countdown");
+      }
     }, 2000),
     setTimeout(() => {
       if (state === "countdown") beginMovement();
@@ -437,6 +602,7 @@ function beginMovement() {
   state = "fighting";
   countdownEl.textContent = "START";
   countdownEl.classList.add("start-flash");
+  playSound("start");
   setTimeout(() => {
     if (state === "fighting") countdownEl.classList.add("hidden");
   }, 420);
@@ -684,7 +850,7 @@ function updateLeeAura(dt) {
       }
       if (Math.random() < 0.08) playSound("aura");
     } else {
-      applyHeal(lee, LEE_AURA_RATE * dt, { ultGainMultiplier: 2 });
+      applyHeal(lee, LEE_AURA_RATE * dt);
       if (Math.random() < 0.25) addParticle(lee.x, lee.y, "#ff9b9b", 2);
     }
   }
@@ -755,7 +921,7 @@ function applyContactDamage(attacker, defender) {
     damage = SHANGLIN_BASE_DAMAGE * (1 + owner.stacks * 0.5);
   }
   const result = damage > 0 ? applyDamage(defender, damage, { source: attacker, fromUltimate: ultimateHit }) : emptyDamageResult();
-  if (result.hpDamage > 0 && (attacker.id === "shanglin" || attacker.isSummon)) addShanglinStack(attacker.isSummon ? attacker.teamOwner : attacker);
+  if (result.totalDamage > 0 && (attacker.id === "shanglin" || attacker.isSummon)) addShanglinStack(attacker.isSummon ? attacker.teamOwner : attacker);
   return { ...result, ultimateHit };
 }
 
@@ -1100,6 +1266,14 @@ function renderScoreboard() {
       <meter id="meter-${index}" min="0" max="${ball.maxHp}" value="${ball.hp}"></meter>
       <p>ULT <span id="ult-${index}">${Math.round(ball.ultCharge)}</span>%</p>
       <meter class="ult-meter" id="ult-meter-${index}" min="0" max="${ULT_MAX}" value="${ball.ultCharge}"></meter>
+      ${
+        ball.id === "shanglin"
+          ? `<div class="summon-hud hidden" id="summon-hud-${index}">
+              <p>분신 HP <span id="summon-hp-${index}">0</span> / 50</p>
+              <meter class="summon-meter" id="summon-meter-${index}" min="0" max="50" value="0"></meter>
+            </div>`
+          : ""
+      }
       <div class="stats-line">
         <span class="tag">속도 <span id="speed-${index}">${ball.speed}</span>px/s</span>
         <span class="tag">${ball.id === "kim" ? "액티브" : "패시브"}</span>
@@ -1118,6 +1292,15 @@ function syncHud() {
     document.getElementById(`ult-${index}`).textContent = Math.round(ball.ultCharge);
     document.getElementById(`ult-meter-${index}`).value = ball.ultCharge;
     document.getElementById(`speed-${index}`).textContent = Math.round(ball.speed);
+    if (ball.id === "shanglin") {
+      const summon = summons.find((item) => item.teamOwner === ball && item.hp > 0);
+      const summonHud = document.getElementById(`summon-hud-${index}`);
+      summonHud.classList.toggle("hidden", !summon);
+      if (summon) {
+        document.getElementById(`summon-hp-${index}`).textContent = Math.ceil(summon.hp);
+        document.getElementById(`summon-meter-${index}`).value = summon.hp;
+      }
+    }
   });
 }
 
@@ -1209,6 +1392,8 @@ function drawBall(ball) {
   ctx.fill();
   ctx.restore();
 
+  drawShanglinMaxStackAura(ball);
+
   drawBallImage(ball);
 
   drawSkillRing(ball);
@@ -1229,6 +1414,43 @@ function drawBall(ball) {
   }
 
   if (state === "countdown") drawNeedle(ball);
+}
+
+function drawShanglinMaxStackAura(ball) {
+  if (ball.id !== "shanglin") return;
+  const owner = ball.isSummon ? ball.teamOwner : ball;
+  if (owner.stacks < SHANGLIN_MAX_STACKS) return;
+
+  const time = performance.now() / 1000;
+  const pulse = 1 + Math.sin(time * 8) * 0.08;
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.shadowColor = "#ff5a1f";
+  ctx.shadowBlur = 28;
+  ctx.strokeStyle = "rgba(255, 90, 31, 0.9)";
+  ctx.lineWidth = 9;
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, (ball.r + 12) * pulse, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.strokeStyle = "rgba(255, 224, 102, 0.72)";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, ball.r + 22 + Math.sin(time * 6) * 4, 0, Math.PI * 2);
+  ctx.stroke();
+
+  for (let index = 0; index < 10; index += 1) {
+    const angle = time * (1.8 + (index % 2) * 0.35) + (Math.PI * 2 * index) / 10;
+    const radius = ball.r + 16 + Math.sin(time * 7 + index) * 7;
+    const x = ball.x + Math.cos(angle) * radius;
+    const y = ball.y + Math.sin(angle) * radius - 5;
+    ctx.fillStyle = index % 2 ? "#ffd166" : "#ff5a1f";
+    ctx.globalAlpha = 0.58 + Math.sin(time * 9 + index) * 0.2;
+    ctx.beginPath();
+    ctx.arc(x, y, 4 + (index % 3), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 function drawStatusLabels(ball) {
@@ -1585,8 +1807,16 @@ function setSimSpeed(speed) {
 }
 
 goSelectBtn.addEventListener("click", () => {
+  playSound("ui");
   renderCharacterSelect();
   showScreen("select");
+});
+document.addEventListener("pointerdown", unlockAudioFromGesture, { capture: true });
+document.addEventListener("touchstart", unlockAudioFromGesture, { capture: true, passive: true });
+document.addEventListener("keydown", unlockAudioFromGesture, { capture: true });
+document.addEventListener("click", unlockAudioFromGesture, { capture: true });
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && !soundMuted) unlockAudio();
 });
 backHomeBtn.addEventListener("click", () => showScreen("home"));
 launchBtn.addEventListener("click", startMatch);

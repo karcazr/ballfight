@@ -309,6 +309,22 @@ p {
   accent-color: #ff4d4d;
 }
 
+.summon-hud {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 10px;
+}
+
+.summon-hud p {
+  color: #86efac;
+  font-weight: 800;
+  margin: 0 0 5px;
+}
+
+.summon-meter {
+  accent-color: #63e6a6;
+}
+
 .stats-line {
   display: flex;
   flex-wrap: wrap;
