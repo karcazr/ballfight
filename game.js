@@ -38,6 +38,12 @@ const LSJ_LETTER_INTERVAL = 1;
 const LSJ_BURST_INTERVAL = 0.11;
 const LETTER_PROJECTILE_SPEED = 680;
 const HOMING_PROJECTILE_SPEED = 520;
+const LEE_ULT_IMMUNITY = 3;
+const BJD_ULT_CAST_TIME = 1;
+const SHANGLIN_BASE_DAMAGE = 20;
+const SHANGLIN_MAX_STACKS = 6;
+const SHANGLIN_STACK_DURATION = 5;
+const SHANGLIN_STACK_FALLOFF = 0.2;
 
 const fighters = {
   kim: {
@@ -61,7 +67,7 @@ const fighters = {
     speed: 260,
     auraRadius: 300,
     skill: "넓은 반경 안에 상대가 없으면 초당 5 회복, 있으면 상대가 초당 5 피해. 이 스킬은 궁극기 게이지 효율이 2배다.",
-    ult: "50의 보호막을 획득하고 중앙으로 이동 후 피해를 입을 때까지 경기장 전체에 초당 10 피해, 입힌 피해만큼 체력 회복.",
+    ult: "50의 보호막과 3초 피해 면역을 얻고 중앙에서 경기장 전체에 초당 10 피해, 입힌 피해만큼 체력 회복.",
   },
   bjd: {
     id: "bjd",
@@ -72,7 +78,7 @@ const fighters = {
     maxHp: 150,
     speed: 350,
     skill: "3초마다 강한 파동을 만들어 가까울수록 큰 피해를 줌.",
-    ult: "맵 전역에 빠른 파동을 분출하여 맞은 적에게 30 피해와 5초 기절.",
+    ult: "1초 동안 멈춰 시전한 뒤 느린 전역 파동으로 30 피해와 5초 기절.",
   },
   lsj: {
     id: "lsj",
@@ -83,7 +89,18 @@ const fighters = {
     maxHp: 200,
     speed: 300,
     skill: "1초마다 글자를 모으고 7글자가 모이면 가장 가까운 적에게 하나씩 발사.",
-    ult: "모든 글자를 유도탄으로 날려 가장 가까운 적에게 반드시 적중.",
+    ult: "빛나는 글자 7개를 새로 모은 뒤 유도탄으로 연속 발사.",
+  },
+  shanglin: {
+    id: "shanglin",
+    name: "샹린(베타)",
+    color: "#63e6a6",
+    imageSrc: "shanglin.png",
+    tags: ["브루저", "지속 전투", "베타"],
+    maxHp: 250,
+    speed: 320,
+    skill: "접촉 공격 적중 시 최대 6중첩. 중첩마다 공격력이 50% 증가하고 최대 중첩에서 이동속도 50 증가.",
+    ult: "체력 50의 분신을 소환하며, 분신과 본체가 중첩을 공유.",
   },
 };
 
@@ -93,12 +110,18 @@ for (const fighter of Object.values(fighters)) {
   image.src = fighter.imageSrc;
   fighterImages[fighter.id] = image;
 }
+for (let stack = 0; stack <= SHANGLIN_MAX_STACKS; stack += 1) {
+  const image = new Image();
+  image.src = `shanglin${stack}.png`;
+  fighterImages[`shanglin-${stack}`] = image;
+}
 
 let selected = { one: "kim", two: "lee" };
 let balls = [];
 let particles = [];
 let shockwaves = [];
 let projectiles = [];
+let summons = [];
 let damageTexts = [];
 let state = "home";
 let countdownTimers = [];
@@ -289,6 +312,15 @@ function makeBall(fighterId, x, y) {
     letterBurstQueue: [],
     letterBurstTimer: 0,
     letterBurstHoming: false,
+    ultReady: false,
+    lsjUltCollecting: false,
+    damageImmuneTimer: 0,
+    bjdUltCastTimer: 0,
+    savedVelocity: null,
+    stacks: 0,
+    stackTimer: 0,
+    stackFalloffTimer: 0,
+    teamOwner: null,
     pendingDamageText: { damage: 0, heal: 0 },
     status: {},
   };
@@ -308,6 +340,7 @@ function startMatch() {
   particles = [];
   shockwaves = [];
   projectiles = [];
+  summons = [];
   damageTexts = [];
   screenShake = 0;
   screenFlash = 0;
@@ -443,14 +476,17 @@ function update(dt) {
     updateStatuses(ball, dt);
     ball.hitCooldown = Math.max(0, ball.hitCooldown - dt);
     ball.drinkFlash = Math.max(0, ball.drinkFlash - dt);
+    ball.damageImmuneTimer = Math.max(0, ball.damageImmuneTimer - dt);
     updateLsjBurst(ball, dt);
+    updateBjdUltimateCast(ball, dt);
+    updateShanglin(ball, dt);
     if (canAct(ball)) {
       updateKimAbility(ball, dt);
       updateBjdAbility(ball, dt);
       updateLsjAbility(ball, dt);
     }
     updateLeeUltimate(ball, dt);
-    if (ball.id === "lee" && ball.ultActive) continue;
+    if ((ball.id === "lee" && ball.ultActive) || ball.bjdUltCastTimer > 0) continue;
     if (canMove(ball)) {
       const slow = getSlowMultiplier(ball);
       ball.x += ball.vx * dt * slow;
@@ -458,6 +494,8 @@ function update(dt) {
       bounceOnWalls(ball);
     }
   }
+
+  updateSummons(dt);
 
   updateLeeAura(dt);
   resolveBallHit();
@@ -479,7 +517,7 @@ function updateKimAbility(ball, dt) {
 }
 
 function updateBjdAbility(ball, dt) {
-  if (ball.id !== "bjd" || ball.ultActive) return;
+  if (ball.id !== "bjd" || ball.ultActive || ball.bjdUltCastTimer > 0) return;
   ball.skillTimer += dt;
   if (ball.skillTimer >= BJD_SKILL_COOLDOWN) {
     ball.skillTimer = 0;
@@ -489,31 +527,43 @@ function updateBjdAbility(ball, dt) {
 }
 
 function updateLsjAbility(ball, dt) {
-  if (ball.id !== "lsj" || ball.ultActive) return;
+  if (ball.id !== "lsj" || ball.letterBurstQueue.length) return;
+  if (ball.ultReady && !ball.lsjUltCollecting) beginLsjUltimateCollection(ball);
+  if (ball.lsjUltCollecting) {
+    collectLsjLetters(ball, dt, true);
+    return;
+  }
+  if (ball.ultActive) return;
+  collectLsjLetters(ball, dt, false);
+}
+
+function collectLsjLetters(ball, dt, ultimate) {
   ball.letterTimer += dt;
   while (ball.letterTimer >= LSJ_LETTER_INTERVAL && ball.letters.length < LSJ_LETTERS.length) {
     ball.letterTimer -= LSJ_LETTER_INTERVAL;
     ball.letters.push(LSJ_LETTERS[ball.letters.length]);
-    burst(ball.x, ball.y, "#8bd3ff", 8);
+    burst(ball.x, ball.y, ultimate ? "#ffffff" : "#8bd3ff", ultimate ? 14 : 8);
   }
-
-  if (ball.letters.length >= LSJ_LETTERS.length) queueLsjLetters(ball, false);
+  if (ball.letters.length >= LSJ_LETTERS.length) {
+    ball.lsjUltCollecting = false;
+    queueLsjLetters(ball, ultimate);
+  }
 }
 
 function castBjdWave(ball) {
   playSound("bjdWave");
-  addShockwave(ball.x, ball.y, 500, "#f4d35e", 0.9, 16);
-  addShockwave(ball.x, ball.y, 500, "#ffffff", 0.55, 7);
+  addShockwave(ball.x, ball.y, 450, "#f4d35e", 0.9, 16);
+  addShockwave(ball.x, ball.y, 450, "#ffffff", 0.55, 7);
   screenShake = Math.max(screenShake, 0.18);
-  for (const target of balls) {
+  for (const target of combatants()) {
     if (target === ball || target.hp <= 0) continue;
     const d = distance(ball, target);
     let damage = 0;
-    if (d <= 100) damage = 100;
-    else if (d <= 200) damage = 80;
-    else if (d <= 300) damage = 60;
-    else if (d <= 400) damage = 40;
-    else if (d <= 500) damage = 20;
+    if (d <= 50) damage = 80;
+    else if (d <= 150) damage = 60;
+    else if (d <= 250) damage = 50;
+    else if (d <= 350) damage = 40;
+    else if (d <= 450) damage = 30;
     if (damage > 0) {
       applyDamage(target, damage, { source: ball });
       knockAway(target, ball, 260 + damage * 3);
@@ -537,6 +587,10 @@ function updateLsjBurst(ball, dt) {
     const letter = ball.letterBurstQueue.shift();
     fireLsjLetter(ball, letter, ball.letterBurstHoming);
     ball.letterBurstTimer += LSJ_BURST_INTERVAL;
+  }
+  if (!ball.letterBurstQueue.length && ball.letterBurstHoming) {
+    ball.ultActive = false;
+    ball.letterBurstHoming = false;
   }
 }
 
@@ -573,7 +627,7 @@ function updateLeeUltimate(ball, dt) {
   ball.vy = 0;
 
   let totalDamage = 0;
-  for (const target of balls) {
+  for (const target of combatants()) {
     if (target === ball || target.hp <= 0) continue;
     totalDamage += applyDamage(target, LEE_ULT_DRAIN_RATE * dt, { source: ball, fromUltimate: true }).hpDamage;
     if (Math.random() < 0.65) addParticle(target.x, target.y, "#ff6b6b", 3);
@@ -598,7 +652,7 @@ function updateProjectiles(dt) {
     projectile.x += projectile.vx * dt;
     projectile.y += projectile.vy * dt;
 
-    for (const target of balls) {
+    for (const target of combatants()) {
       if (target === projectile.owner || target.hp <= 0) continue;
       if (distance(projectile, target) <= projectile.r + target.r) {
         applyDamage(target, projectile.damage, { source: projectile.owner, fromUltimate: projectile.homing });
@@ -621,12 +675,13 @@ function updateProjectiles(dt) {
 
 function updateLeeAura(dt) {
   for (const lee of balls.filter((ball) => ball.id === "lee")) {
-    const target = balls.find((ball) => ball !== lee && ball.hp > 0);
-    if (!target) continue;
-    const inAura = distance(lee, target) <= lee.auraRadius;
-    if (inAura) {
-      applyDamage(target, LEE_AURA_RATE * dt, { source: lee, ultGainMultiplier: 2 });
-      if (Math.random() < 0.45) addParticle(target.x, target.y, "#ff6b6b", 3);
+    const targets = combatants().filter((target) => target !== lee && target.teamOwner !== lee && target.hp > 0);
+    const inAuraTargets = targets.filter((target) => distance(lee, target) <= lee.auraRadius);
+    if (inAuraTargets.length) {
+      for (const target of inAuraTargets) {
+        applyDamage(target, LEE_AURA_RATE * dt, { source: lee, ultGainMultiplier: 2 });
+        if (Math.random() < 0.45) addParticle(target.x, target.y, "#ff6b6b", 3);
+      }
       if (Math.random() < 0.08) playSound("aura");
     } else {
       applyHeal(lee, LEE_AURA_RATE * dt, { ultGainMultiplier: 2 });
@@ -695,8 +750,12 @@ function applyContactDamage(attacker, defender) {
     attacker.skillTimer = 0;
     attacker.drinkFlash = 0;
     burst(attacker.x, attacker.y, "#b56cff", 18);
+  } else if (attacker.id === "shanglin" || attacker.isSummon) {
+    const owner = attacker.isSummon ? attacker.teamOwner : attacker;
+    damage = SHANGLIN_BASE_DAMAGE * (1 + owner.stacks * 0.5);
   }
   const result = damage > 0 ? applyDamage(defender, damage, { source: attacker, fromUltimate: ultimateHit }) : emptyDamageResult();
+  if (result.hpDamage > 0 && (attacker.id === "shanglin" || attacker.isSummon)) addShanglinStack(attacker.isSummon ? attacker.teamOwner : attacker);
   return { ...result, ultimateHit };
 }
 
@@ -705,6 +764,10 @@ function emptyDamageResult() {
 }
 
 function applyDamage(target, amount, options = {}) {
+  if (target.damageImmuneTimer > 0) {
+    if (Math.random() < 0.35) addParticle(target.x, target.y, "#ffffff", 4);
+    return emptyDamageResult();
+  }
   amount = applyDamageModifiers(options.source, target, amount);
   const beforeHp = target.hp;
   const beforeShield = target.shield;
@@ -724,7 +787,7 @@ function applyDamage(target, amount, options = {}) {
     playSound("damage");
   }
 
-  if (options.source && !options.fromUltimate) gainUltimate(options.source, hpDamage, options.ultGainMultiplier);
+  if (options.source && !options.fromUltimate) gainUltimate(options.source.teamOwner || options.source, hpDamage, options.ultGainMultiplier);
 
   return { shieldDamage, hpDamage, totalDamage: shieldDamage + hpDamage };
 }
@@ -741,7 +804,13 @@ function applyHeal(target, amount, options = {}) {
 function gainUltimate(ball, amount, multiplier = 1) {
   if (ball.ultActive || ball.ultPrimed || ball.hp <= 0) return;
   ball.ultCharge = Math.min(ULT_MAX, ball.ultCharge + amount * ULT_GAIN_PER_POINT * multiplier);
-  if (ball.ultCharge >= ULT_MAX) castUltimate(ball);
+  if (ball.ultCharge < ULT_MAX) return;
+  if (ball.id === "lsj") {
+    ball.ultReady = true;
+    if (!ball.letterBurstQueue.length) beginLsjUltimateCollection(ball);
+    return;
+  }
+  castUltimate(ball);
 }
 
 function castUltimate(ball) {
@@ -750,6 +819,7 @@ function castUltimate(ball) {
   if (ball.id === "lee") castLeeUltimate(ball);
   if (ball.id === "bjd") castBjdUltimate(ball);
   if (ball.id === "lsj") castLsjUltimate(ball);
+  if (ball.id === "shanglin") castShanglinUltimate(ball);
 }
 
 function castKimUltimate(ball) {
@@ -769,6 +839,7 @@ function castKimUltimate(ball) {
 
 function castLeeUltimate(ball) {
   ball.ultActive = true;
+  ball.damageImmuneTimer = LEE_ULT_IMMUNITY;
   ball.shield += LEE_ULT_SHIELD_GAIN;
   ball.x = ARENA_SIZE / 2;
   ball.y = ARENA_SIZE / 2;
@@ -782,34 +853,80 @@ function castLeeUltimate(ball) {
 
 function castBjdUltimate(ball) {
   ball.ultActive = true;
-  addShockwave(ball.x, ball.y, ARENA_SIZE * 1.25, "#ffffff", 0.95, 18);
-  addShockwave(ball.x, ball.y, ARENA_SIZE * 1.05, "#f4d35e", 0.8, 12);
+  ball.bjdUltCastTimer = BJD_ULT_CAST_TIME;
+  ball.savedVelocity = { vx: ball.vx, vy: ball.vy };
+  ball.vx = 0;
+  ball.vy = 0;
+  addShockwave(ball.x, ball.y, 150, "#ffffff", 1, 10);
+  burst(ball.x, ball.y, "#f4d35e", 30);
+}
+
+function updateBjdUltimateCast(ball, dt) {
+  if (ball.id !== "bjd" || ball.bjdUltCastTimer <= 0) return;
+  ball.bjdUltCastTimer = Math.max(0, ball.bjdUltCastTimer - dt);
+  ball.vx = 0;
+  ball.vy = 0;
+  if (Math.random() < 0.8) addParticle(ball.x, ball.y, "#ffffff", 4);
+  if (ball.bjdUltCastTimer > 0) return;
+  releaseBjdUltimate(ball);
+}
+
+function releaseBjdUltimate(ball) {
+  addShockwave(ball.x, ball.y, ARENA_SIZE * 1.25, "#ffffff", 2.25, 20, {
+    owner: ball,
+    damage: 30,
+    stun: 5,
+    knockback: 720,
+  });
+  addShockwave(ball.x, ball.y, ARENA_SIZE * 1.05, "#f4d35e", 1.9, 13);
   screenFlash = 0.55;
   screenShake = 0.75;
   playSound("bjdUlt");
-  for (const target of balls) {
-    if (target === ball || target.hp <= 0) continue;
-    applyDamage(target, 30, { source: ball, fromUltimate: true });
-    addStatus(target, "stun", 5);
-    knockAway(target, ball, 720);
+  ball.ultActive = false;
+  if (ball.savedVelocity) {
+    ball.vx = ball.savedVelocity.vx;
+    ball.vy = ball.savedVelocity.vy;
+    setVelocityMagnitude(ball, ball.speed);
   }
-  setTimeout(() => {
-    ball.ultActive = false;
-  }, 500);
+  ball.savedVelocity = null;
 }
 
 function castLsjUltimate(ball) {
+  ball.ultReady = true;
+  beginLsjUltimateCollection(ball);
+}
+
+function beginLsjUltimateCollection(ball) {
+  if (ball.id !== "lsj" || !ball.ultReady || ball.letterBurstQueue.length || ball.lsjUltCollecting) return;
+  ball.ultCharge = 0;
+  ball.ultReady = false;
   ball.ultActive = true;
-  ball.letters = [...LSJ_LETTERS];
-  queueLsjLetters(ball, true);
+  ball.lsjUltCollecting = true;
+  ball.letters = [];
+  ball.letterTimer = 0;
   addShockwave(ball.x, ball.y, 260, "#8bd3ff", 0.85, 10);
   addShockwave(ball.x, ball.y, 180, "#ffffff", 0.8, 7);
   screenFlash = 0.38;
   screenShake = 0.35;
   playSound("letterUlt");
-  setTimeout(() => {
-    ball.ultActive = false;
-  }, 850);
+}
+
+function castShanglinUltimate(ball) {
+  ball.ultCharge = 0;
+  summons = summons.filter((summon) => summon.teamOwner !== ball);
+  const angle = randomAngle();
+  const summon = makeBall("shanglin", ball.x + Math.cos(angle) * 110, ball.y + Math.sin(angle) * 110);
+  summon.name = "샹린 분신";
+  summon.maxHp = 50;
+  summon.hp = 50;
+  summon.r = BALL_RADIUS * 0.82;
+  summon.isSummon = true;
+  summon.teamOwner = ball;
+  summon.vx = Math.cos(angle) * summon.speed;
+  summon.vy = Math.sin(angle) * summon.speed;
+  summons.push(summon);
+  burst(summon.x, summon.y, "#63e6a6", 42);
+  addShockwave(summon.x, summon.y, 170, "#63e6a6", 0.8, 10);
 }
 
 function setVelocityMagnitude(ball, speed) {
@@ -817,6 +934,78 @@ function setVelocityMagnitude(ball, speed) {
   if (!Number.isFinite(angle)) return;
   ball.vx = Math.cos(angle) * speed;
   ball.vy = Math.sin(angle) * speed;
+}
+
+function addShanglinStack(ball) {
+  ball.stacks = Math.min(SHANGLIN_MAX_STACKS, ball.stacks + 1);
+  ball.stackTimer = SHANGLIN_STACK_DURATION;
+  ball.stackFalloffTimer = SHANGLIN_STACK_FALLOFF;
+  updateShanglinSpeed(ball);
+  burst(ball.x, ball.y, "#63e6a6", 10 + ball.stacks * 2);
+}
+
+function updateShanglin(ball, dt) {
+  if (ball.id !== "shanglin" || ball.isSummon || ball.stacks <= 0) return;
+  if (ball.stackTimer > 0) {
+    ball.stackTimer = Math.max(0, ball.stackTimer - dt);
+    return;
+  }
+  ball.stackFalloffTimer -= dt;
+  while (ball.stackFalloffTimer <= 0 && ball.stacks > 0) {
+    ball.stacks -= 1;
+    ball.stackFalloffTimer += SHANGLIN_STACK_FALLOFF;
+    updateShanglinSpeed(ball);
+  }
+}
+
+function updateShanglinSpeed(ball) {
+  const nextSpeed = fighters.shanglin.speed + (ball.stacks >= SHANGLIN_MAX_STACKS ? 50 : 0);
+  if (ball.speed === nextSpeed) return;
+  ball.speed = nextSpeed;
+  setVelocityMagnitude(ball, ball.speed);
+  for (const summon of summons.filter((item) => item.teamOwner === ball)) {
+    summon.speed = nextSpeed;
+    setVelocityMagnitude(summon, summon.speed);
+  }
+}
+
+function updateSummons(dt) {
+  for (const summon of summons) {
+    summon.hitCooldown = Math.max(0, summon.hitCooldown - dt);
+    if (summon.hp <= 0 || summon.teamOwner.hp <= 0) continue;
+    summon.stacks = summon.teamOwner.stacks;
+    if (canMove(summon)) {
+      summon.x += summon.vx * dt;
+      summon.y += summon.vy * dt;
+      bounceOnWalls(summon);
+    }
+    const enemies = balls.filter((target) => target !== summon.teamOwner && target.hp > 0);
+    for (const target of enemies) resolveEntityHit(summon, target);
+  }
+  summons = summons.filter((summon) => summon.hp > 0 && summon.teamOwner.hp > 0);
+}
+
+function resolveEntityHit(a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dist = Math.hypot(dx, dy) || 1;
+  const overlap = a.r + b.r - dist;
+  if (overlap <= 0) return;
+  const nx = dx / dist;
+  const ny = dy / dist;
+  a.x -= nx * overlap * 0.5;
+  b.x += nx * overlap * 0.5;
+  if (a.hitCooldown > 0 || b.hitCooldown > 0) return;
+  const aHit = applyContactDamage(a, b);
+  const bHit = applyContactDamage(b, a);
+  a.hitCooldown = HIT_COOLDOWN;
+  b.hitCooldown = HIT_COOLDOWN;
+  a.vx = -nx * (bHit.ultimateHit ? HIT_KNOCKBACK * 1.75 : HIT_KNOCKBACK);
+  a.vy = -ny * (bHit.ultimateHit ? HIT_KNOCKBACK * 1.75 : HIT_KNOCKBACK);
+  b.vx = nx * (aHit.ultimateHit ? HIT_KNOCKBACK * 1.75 : HIT_KNOCKBACK);
+  b.vy = ny * (aHit.ultimateHit ? HIT_KNOCKBACK * 1.75 : HIT_KNOCKBACK);
+  burst((a.x + b.x) / 2, (a.y + b.y) / 2, "#ffffff", 18);
+  playSound("collision");
 }
 
 function updateStatuses(ball, dt) {
@@ -912,7 +1101,7 @@ function renderScoreboard() {
       <p>ULT <span id="ult-${index}">${Math.round(ball.ultCharge)}</span>%</p>
       <meter class="ult-meter" id="ult-meter-${index}" min="0" max="${ULT_MAX}" value="${ball.ultCharge}"></meter>
       <div class="stats-line">
-        <span class="tag">속도 ${ball.speed}px/s</span>
+        <span class="tag">속도 <span id="speed-${index}">${ball.speed}</span>px/s</span>
         <span class="tag">${ball.id === "kim" ? "액티브" : "패시브"}</span>
       </div>
     `;
@@ -928,6 +1117,7 @@ function syncHud() {
     document.getElementById(`shield-fill-${index}`).style.width = `${Math.min(100, (ball.shield / ball.maxHp) * 100)}%`;
     document.getElementById(`ult-${index}`).textContent = Math.round(ball.ultCharge);
     document.getElementById(`ult-meter-${index}`).value = ball.ultCharge;
+    document.getElementById(`speed-${index}`).textContent = Math.round(ball.speed);
   });
 }
 
@@ -947,6 +1137,7 @@ function draw() {
   for (const projectile of projectiles) drawProjectile(projectile);
   for (const particle of particles) drawParticle(particle);
   for (const ball of balls) drawBall(ball);
+  for (const summon of summons) drawBall(summon);
   for (const text of damageTexts) drawDamageText(text);
   ctx.restore();
 
@@ -1023,12 +1214,26 @@ function drawBall(ball) {
   drawSkillRing(ball);
   drawOrbitingLetters(ball);
   drawStatusLabels(ball);
+  drawShanglinInfo(ball);
+
+  if (ball.damageImmuneTimer > 0) {
+    ctx.save();
+    ctx.globalAlpha = 0.32 + Math.sin(performance.now() / 90) * 0.08;
+    ctx.fillStyle = "#ffffff";
+    ctx.shadowColor = "#ffffff";
+    ctx.shadowBlur = 30;
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r + 3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
 
   if (state === "countdown") drawNeedle(ball);
 }
 
 function drawStatusLabels(ball) {
   const labels = [];
+  if (ball.bjdUltCastTimer > 0) labels.push("시전!");
   if (ball.status.stun) labels.push("기절!");
   if (ball.status.vulnerable) labels.push("취약!");
   if (ball.status.weakened) labels.push("약화!");
@@ -1062,8 +1267,11 @@ function drawOrbitingLetters(ball) {
     const angle = performance.now() / 450 + (Math.PI * 2 * index) / LSJ_LETTERS.length;
     const x = ball.x + Math.cos(angle) * (ball.r + 26);
     const y = ball.y + Math.sin(angle) * (ball.r + 26);
+    const ultimate = ball.lsjUltCollecting;
     ctx.fillStyle = "#ffffff";
-    ctx.strokeStyle = "#1e6aa0";
+    ctx.strokeStyle = ultimate ? "#ff3b3b" : "#1e6aa0";
+    ctx.shadowColor = ultimate ? "#ffffff" : "transparent";
+    ctx.shadowBlur = ultimate ? 18 : 0;
     ctx.lineWidth = 4;
     ctx.strokeText(letter, x, y);
     ctx.fillText(letter, x, y);
@@ -1071,8 +1279,35 @@ function drawOrbitingLetters(ball) {
   ctx.restore();
 }
 
+function drawShanglinInfo(ball) {
+  if (ball.id !== "shanglin") return;
+  const owner = ball.isSummon ? ball.teamOwner : ball;
+  ctx.save();
+  ctx.font = "900 22px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "#101216";
+  ctx.fillStyle = owner.stacks >= SHANGLIN_MAX_STACKS ? "#ffe66d" : "#63e6a6";
+  ctx.strokeText(`${owner.stacks}`, ball.x, ball.y + ball.r + 25);
+  ctx.fillText(`${owner.stacks}`, ball.x, ball.y + ball.r + 25);
+  if (ball.isSummon) {
+    ctx.strokeStyle = "rgba(255,255,255,0.22)";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r + 8, -Math.PI / 2, Math.PI * 1.5);
+    ctx.stroke();
+    ctx.strokeStyle = "#63e6a6";
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.r + 8, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(ball.hp / ball.maxHp, 0, 1));
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawBallImage(ball) {
-  const image = fighterImages[ball.id];
+  const imageKey = ball.id === "shanglin" ? `shanglin-${ball.isSummon ? ball.teamOwner.stacks : ball.stacks}` : ball.id;
+  const image = fighterImages[imageKey] || fighterImages[ball.id];
   ctx.save();
   ctx.beginPath();
   ctx.arc(ball.x, ball.y, ball.r - 3, 0, Math.PI * 2);
@@ -1177,7 +1412,7 @@ function addDamageText(target, amount, type) {
 }
 
 function flushDamageTextQueues() {
-  for (const ball of balls) {
+  for (const ball of combatants()) {
     flushDamageText(ball, "damage");
     flushDamageText(ball, "heal");
   }
@@ -1221,12 +1456,23 @@ function drawDamageText(text) {
 function updateShockwaves(dt) {
   for (const shockwave of shockwaves) {
     shockwave.age += dt;
+    if (!shockwave.damage || !shockwave.owner) continue;
+    const currentRadius = shockwave.radius * clamp(shockwave.age / shockwave.life, 0, 1);
+    for (const target of combatants()) {
+      if (target === shockwave.owner || target.hp <= 0 || shockwave.hitTargets.has(target)) continue;
+      if (target === shockwave.owner.teamOwner || target.teamOwner === shockwave.owner || (target.teamOwner && target.teamOwner === shockwave.owner.teamOwner)) continue;
+      if (distance(shockwave, target) > currentRadius + target.r) continue;
+      shockwave.hitTargets.add(target);
+      applyDamage(target, shockwave.damage, { source: shockwave.owner, fromUltimate: true });
+      if (shockwave.stun) addStatus(target, "stun", shockwave.stun);
+      if (shockwave.knockback) knockAway(target, shockwave.owner, shockwave.knockback);
+    }
   }
   shockwaves = shockwaves.filter((shockwave) => shockwave.age < shockwave.life);
 }
 
-function addShockwave(x, y, radius, color, life, width) {
-  shockwaves.push({ x, y, radius, color, life, width, age: 0 });
+function addShockwave(x, y, radius, color, life, width, options = {}) {
+  shockwaves.push({ x, y, radius, color, life, width, age: 0, hitTargets: new Set(), ...options });
 }
 
 function drawShockwave(shockwave) {
@@ -1316,8 +1562,8 @@ function angleTo(a, b) {
 function nearestEnemy(ball) {
   let best = null;
   let bestDistance = Infinity;
-  for (const target of balls) {
-    if (target === ball || target.hp <= 0) continue;
+  for (const target of combatants()) {
+    if (target === ball || target.hp <= 0 || target === ball.teamOwner || target.teamOwner === ball || (target.teamOwner && target.teamOwner === ball.teamOwner)) continue;
     const d = distance(ball, target);
     if (d < bestDistance) {
       best = target;
@@ -1325,6 +1571,10 @@ function nearestEnemy(ball) {
     }
   }
   return best;
+}
+
+function combatants() {
+  return [...balls, ...summons];
 }
 
 function setSimSpeed(speed) {
