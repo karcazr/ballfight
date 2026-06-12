@@ -17,6 +17,26 @@
         <button id="goSelectBtn" class="primary-btn home-start" type="button">시작</button>
       </section>
 
+      <section id="modeScreen" class="screen mode-screen hidden">
+        <header class="panel-head">
+          <div>
+            <p class="eyebrow">GAME MODE</p>
+            <h1>대전 방식</h1>
+          </div>
+          <button id="modeBackBtn" type="button">뒤로</button>
+        </header>
+        <div class="mode-options">
+          <button class="mode-btn" type="button" data-players="2">
+            <strong>1vs1</strong>
+            <span>두 캐릭터가 마지막까지 결투</span>
+          </button>
+          <button class="mode-btn" type="button" data-players="3">
+            <strong>1vs1vs1</strong>
+            <span>세 캐릭터 중 최후의 한 명이 승리</span>
+          </button>
+        </div>
+      </section>
+
       <section id="selectScreen" class="screen select-screen hidden">
         <header class="panel-head">
           <div>
@@ -34,6 +54,10 @@
           <section class="slot" aria-label="character two">
             <h2>캐릭터 2</h2>
             <div id="slotTwoCards" class="cards"></div>
+          </section>
+          <section id="slotThree" class="slot hidden" aria-label="character three" hidden style="display: none">
+            <h2>캐릭터 3</h2>
+            <div id="slotThreeCards" class="cards"></div>
           </section>
         </div>
 
@@ -65,6 +89,7 @@
 
         <section id="scoreboard" class="scoreboard" aria-label="fighter health"></section>
       </section>
+      <div class="version-label" aria-label="game version">v1.0.1(beta)</div>
     </main>
 
     <script src="game.js"></script>

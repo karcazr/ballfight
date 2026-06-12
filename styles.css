@@ -80,13 +80,43 @@ p {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 .home-screen {
   min-height: 560px;
   place-content: center;
   text-align: center;
+}
+
+.mode-screen {
+  min-height: 560px;
+  place-content: center;
+}
+
+.mode-options {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.mode-btn {
+  align-content: center;
+  display: grid;
+  gap: 7px;
+  min-height: 150px;
+  padding: 20px;
+  text-align: left;
+}
+
+.mode-btn strong {
+  color: var(--gold);
+  font-size: 28px;
+}
+
+.mode-btn span {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .eyebrow {
@@ -130,6 +160,15 @@ p {
   width: 100%;
 }
 
+.battle-head {
+  width: 100%;
+}
+
+.battle-head h1 {
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
 .battle-actions {
   align-items: center;
   display: flex;
@@ -167,6 +206,14 @@ p {
   display: grid;
   gap: 14px;
   grid-template-columns: 1fr 1fr;
+}
+
+.battle-actions button {
+  white-space: nowrap;
+}
+
+.select-grid.triple {
+  grid-template-columns: repeat(3, 1fr);
 }
 
 .slot,
@@ -275,6 +322,18 @@ p {
   width: min(100%, 760px);
 }
 
+.scoreboard.triple {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.scoreboard.triple .fighter-card {
+  padding: 11px;
+}
+
+.scoreboard.triple .fighter-card h2 {
+  font-size: 17px;
+}
+
 .fighter-card h2 {
   font-size: 20px;
 }
@@ -325,6 +384,37 @@ p {
   accent-color: #63e6a6;
 }
 
+.summon-list {
+  display: grid;
+  gap: 5px;
+}
+
+.summon-row {
+  align-items: center;
+  display: grid;
+  font-size: 12px;
+  gap: 7px;
+  grid-template-columns: 16px minmax(0, 1fr) 24px;
+}
+
+.summon-row span,
+.summon-row strong {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.version-label {
+  bottom: 10px;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  position: fixed;
+  right: 12px;
+  z-index: 20;
+}
+
 .stats-line {
   display: flex;
   flex-wrap: wrap;
@@ -351,6 +441,14 @@ meter {
 
   .home-screen {
     min-height: 480px;
+  }
+
+  .mode-screen {
+    min-height: 480px;
+  }
+
+  .mode-options {
+    grid-template-columns: 1fr;
   }
 
   .panel-head,
