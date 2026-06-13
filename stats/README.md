@@ -1,5 +1,7 @@
 # Ballfight balance statistics
 
+The simulator automatically uses all but one logical CPU core. Use `--workers 2` to reduce CPU load or `--workers 1` for the lightest execution. Visual-only particles, decorative shockwaves, and projectile trails are skipped during statistics runs without changing combat results.
+
 개발자용 전투 통계는 모드별 TXT 파일에 저장됩니다. 사이트에서는 이 파일을 사용하지 않습니다.
 
 ```powershell

@@ -29,6 +29,7 @@ const selectGrid = document.querySelector(".select-grid");
 
 const ARENA_SIZE = canvas.width;
 const BALL_RADIUS = 51;
+const MATCH_TIME_LIMIT = 300;
 const HIT_KNOCKBACK = 520;
 const HIT_COOLDOWN = 0.48;
 const KIM_SKILL_COOLDOWN = 5;
@@ -52,17 +53,19 @@ const SHANGLIN_MAX_STACKS = 6;
 const SHANGLIN_STACK_DURATION = 5;
 const SHANGLIN_STACK_FALLOFF = 0.2;
 const KTH_SKILL_COOLDOWN = 10;
-const KTH_SKILL_CAST_TIME = 0.5;
-const KTH_SKILL_DAMAGE_RATIO = 0.12;
+const KTH_SKILL_CAST_TIME = 0.25;
+const KTH_SKILL_DAMAGES = [40, 60, 80];
 const KTH_SKILL_STUN_DURATIONS = [1, 1.5, 2];
 const KTH_SKILL_RANGE_GAPS = [160, 220, 300];
+const KTH_RADIUS_MULTIPLIERS = [1, 1.5, 3];
 const KTH_ULT_INTERVAL = 30;
-const KTH_EVOLVE_CAST_TIME = 1;
-const KTH_HEAL_CAST_TIME = 0.5;
-const JO_STAGE_DURATIONS = [9, 7, 5, 3, 1];
-const JO_KIDNEY_DAMAGE = 15;
+const KTH_EVOLVE_CAST_TIME = 0.5;
+const KTH_HEAL_CAST_TIME = 0.25;
+const JO_STAGE_DURATIONS = [7, 5, 3, 1];
+const JO_KIDNEY_DAMAGE = 12;
 const JO_KIDNEY_HIT_COOLDOWN = 0.5;
-const JO_ULT_DURATION = 10;
+const JO_ORBIT_SPEED = 4.16;
+const JO_ORBIT_RANGE_GAP = 145;
 const PARK_BASE_SKILL_COOLDOWN = 5;
 const PARK_SKILL_CAST_TIME = 0.3;
 const PARK_ULT_DURATION = 15;
@@ -90,7 +93,7 @@ const fighters = {
     speed: 260,
     auraRadius: 300,
     skill: "반경 안의 적에게 초당 5 피해, 적이 없으면 초당 5 회복. 회복으로 얻는 궁극기 게이지만 2배.",
-    ult: "50의 보호막과 3초 피해 면역을 얻고 중앙에서 경기장 전체에 초당 10 피해. 면역 종료 후 기절·수면에 맞으면 보호막을 잃고 종료.",
+    ult: "50의 보호막과 3초 피해 면역을 얻고 중앙에서 경기장 전체에 초당 10 피해를 주며 입힌 체력 피해만큼 회복. 면역 종료 후 기절·수면에 맞으면 보호막을 잃고 종료.",
   },
   bjd: {
     id: "bjd",
@@ -135,7 +138,7 @@ const fighters = {
     maxHp: 250,
     speed: 200,
     startingShield: 100,
-    skill: "10초마다 0.5초 준비 후 주변을 내려쳐 최대 체력의 12% 피해와 진화 단계별 1/1.5/2초 기절.",
+    skill: "10초마다 0.25초 준비 후 주변을 내려쳐 진화 단계별 40/60/80 피해와 1/1.5/2초 기절.",
     ult: "30초마다 최대 두 번 체력과 크기가 진화하며, 이후에는 30초마다 체력 50 회복.",
   },
   jo: {
@@ -146,8 +149,8 @@ const fighters = {
     tags: ["원거리 딜러", "지속 전투"],
     maxHp: 200,
     speed: 300,
-    skill: "주변을 도는 콩팥이 주기적으로 1개에서 5개까지 증가하며 접촉한 적에게 15 피해.",
-    ult: "10초 동안 콩팥의 공전 범위와 속도가 증가.",
+    skill: "넓고 빠르게 공전하는 콩팥이 16초 동안 2개에서 5개까지 증가하며 각각 접촉 피해.",
+    ult: "다음 16초 루프 동안 콩팥 개수가 4/6/8/10개로 증가.",
   },
   park: {
     id: "park",
@@ -198,6 +201,10 @@ let lastSoundAt = {};
 let soundMuted = false;
 let audioUnlockPromise = null;
 let developerSimulation = false;
+let matchElapsed = 0;
+let matchTimeLimit = MATCH_TIME_LIMIT;
+let matchWinner = null;
+let matchEndReason = null;
 const fallbackSoundUrls = {};
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -586,7 +593,8 @@ function makeBall(fighterId, x, y) {
     joStageTimer: JO_STAGE_DURATIONS[0],
     joOrbitAngle: 0,
     joKidneyHits: new Map(),
-    joUltTimer: 0,
+    joUltPending: false,
+    joUltLoopActive: false,
     joUltQueued: false,
     money: 0,
     moneyLost: 0,
@@ -612,6 +620,10 @@ function startMatch() {
   setSimSpeed(1);
   stopBtn.textContent = "중단";
   pausedState = null;
+  matchElapsed = 0;
+  matchTimeLimit = MATCH_TIME_LIMIT;
+  matchWinner = null;
+  matchEndReason = null;
   showScreen("battle");
   const spawnPoints =
     playerCount === 3
@@ -770,6 +782,12 @@ function update(dt) {
   }
 
   if (state !== "fighting") return;
+
+  matchElapsed += dt;
+  if (matchElapsed + 1e-9 >= matchTimeLimit) {
+    resolveTimeLimitWinner();
+    return;
+  }
 
   for (const ball of balls) {
     if (ball.eliminated) continue;
@@ -954,8 +972,10 @@ function updateLeeUltimate(ball, dt) {
 function updateProjectiles(dt) {
   for (const projectile of projectiles) {
     projectile.life -= dt;
-    projectile.trail.push({ x: projectile.x, y: projectile.y });
-    if (projectile.trail.length > (projectile.homing ? 10 : 14)) projectile.trail.shift();
+    if (!developerSimulation) {
+      projectile.trail.push({ x: projectile.x, y: projectile.y });
+      if (projectile.trail.length > (projectile.homing ? 10 : 14)) projectile.trail.shift();
+    }
     if (projectile.homing && projectile.target && projectile.target.hp > 0) {
       const angle = angleTo(projectile, projectile.target);
       projectile.vx = Math.cos(angle) * HOMING_PROJECTILE_SPEED;
@@ -1063,7 +1083,7 @@ function restoreKthVelocity(ball) {
 function releaseKthSkill(ball) {
   ball.skillTimer = 0;
   const radius = getKthSkillRadius(ball);
-  const damage = ball.maxHp * KTH_SKILL_DAMAGE_RATIO;
+  const damage = KTH_SKILL_DAMAGES[ball.kthEvolution];
   const stunDuration = KTH_SKILL_STUN_DURATIONS[ball.kthEvolution];
   const isComplete = ball.kthEvolution >= 2;
   burst(ball.x, ball.y, isComplete ? "#fff1b8" : "#ff6b5f", isComplete ? 90 : 48);
@@ -1085,7 +1105,8 @@ function evolveKth(ball) {
   ball.kthEvolution += 1;
   ball.maxHp *= 2;
   ball.hp = Math.min(ball.maxHp, ball.hp * 2);
-  ball.r *= 2;
+  if (ball.kthEvolution === 2) applyHeal(ball, 50, { fromUltimate: true });
+  ball.r = BALL_RADIUS * KTH_RADIUS_MULTIPLIERS[ball.kthEvolution];
   ball.x = clamp(ball.x, ball.r, ARENA_SIZE - ball.r);
   ball.y = clamp(ball.y, ball.r, ARENA_SIZE - ball.r);
   burst(ball.x, ball.y, "#ffd166", 64);
@@ -1107,41 +1128,63 @@ function updateJoAbility(ball, dt) {
   if (ball.id !== "jo") return;
   ball.joStageTimer -= dt;
   while (ball.joStageTimer <= 0) {
-    ball.joStage = (ball.joStage + 1) % JO_STAGE_DURATIONS.length;
+    const nextStage = (ball.joStage + 1) % JO_STAGE_DURATIONS.length;
+    const loopRestarted = nextStage === 0;
+    ball.joStage = nextStage;
     ball.joStageTimer += JO_STAGE_DURATIONS[ball.joStage];
-  }
-  if (ball.joUltTimer > 0) {
-    ball.joUltTimer = Math.max(0, ball.joUltTimer - dt);
-    if (ball.joUltTimer <= 0) {
-      ball.ultActive = false;
-      if (ball.joUltQueued) {
-        ball.joUltQueued = false;
-        castJoUltimate(ball);
+    if (loopRestarted) {
+      if (ball.joUltLoopActive) {
+        ball.joUltLoopActive = false;
+        ball.ultActive = false;
+        if (ball.joUltQueued) {
+          ball.joUltQueued = false;
+          ball.ultCharge = 0;
+          ball.joUltLoopActive = true;
+          ball.ultActive = true;
+        }
+      } else if (ball.joUltPending) {
+        ball.joUltPending = false;
+        ball.joUltLoopActive = true;
+        ball.ultActive = true;
       }
     }
   }
-  const orbitSpeed = ball.joUltTimer > 0 ? 5.2 : 2.6;
-  ball.joOrbitAngle += orbitSpeed * dt;
-  for (const [target, cooldown] of ball.joKidneyHits) {
-    const next = cooldown - dt;
-    if (next <= 0 || target.hp <= 0) ball.joKidneyHits.delete(target);
-    else ball.joKidneyHits.set(target, next);
+  ball.joOrbitAngle += JO_ORBIT_SPEED * dt;
+  for (const [target, cooldowns] of ball.joKidneyHits) {
+    if (target.hp <= 0) {
+      ball.joKidneyHits.delete(target);
+      continue;
+    }
+    let hasCooldown = false;
+    for (let index = 0; index < cooldowns.length; index += 1) {
+      cooldowns[index] = Math.max(0, (cooldowns[index] || 0) - dt);
+      if (cooldowns[index] > 0) hasCooldown = true;
+    }
+    if (!hasCooldown) ball.joKidneyHits.delete(target);
   }
-  const count = ball.joStage + 1;
-  const orbitRadius = ball.r + (ball.joUltTimer > 0 ? 145 : 72);
+  const count = getJoKidneyCount(ball);
+  const orbitRadius = ball.r + JO_ORBIT_RANGE_GAP;
   if (!canAct(ball)) return;
   for (let index = 0; index < count; index += 1) {
     const angle = ball.joOrbitAngle + (Math.PI * 2 * index) / count;
     const kidney = { x: ball.x + Math.cos(angle) * orbitRadius, y: ball.y + Math.sin(angle) * orbitRadius, r: 18 };
     for (const target of combatants()) {
-      if (!isEnemy(ball, target) || target.hp <= 0 || ball.joKidneyHits.has(target)) continue;
+      if (!isEnemy(ball, target) || target.hp <= 0) continue;
+      const cooldowns = ball.joKidneyHits.get(target) || [];
+      if ((cooldowns[index] || 0) > 0) continue;
       if (distance(kidney, target) > kidney.r + target.r) continue;
       applyDamage(target, JO_KIDNEY_DAMAGE, { source: ball });
-      ball.joKidneyHits.set(target, JO_KIDNEY_HIT_COOLDOWN);
+      cooldowns[index] = JO_KIDNEY_HIT_COOLDOWN;
+      ball.joKidneyHits.set(target, cooldowns);
       burst(kidney.x, kidney.y, "#80cfa9", 12);
       playSound("kidneyHit");
     }
   }
+}
+
+function getJoKidneyCount(ball) {
+  const normalCount = ball.joStage + 2;
+  return ball.joUltLoopActive ? normalCount * 2 : normalCount;
 }
 
 function updateParkAbility(ball, dt) {
@@ -1242,7 +1285,7 @@ function updateParkUltimate(ball, dt) {
 function updateParkFields() {
   for (const park of balls.filter((ball) => ball.id === "park" && ball.parkUltTimer > 0 && ball.parkField)) {
     for (const target of combatants()) {
-      if (!isEnemy(park, target) || target.hp <= 0 || distance(park.parkField, target) > PARK_ULT_RADIUS + target.r) continue;
+      if (!isEnemy(park, target) || target.hp <= 0 || distance(park, target) > PARK_ULT_RADIUS + target.r) continue;
       target.status.parkFieldSlow = 0.08;
       target.status.weakened = Math.max(target.status.weakened || 0, 0.08);
     }
@@ -1377,10 +1420,11 @@ function applyHeal(target, amount, options = {}) {
 
 function gainUltimate(ball, amount, multiplier = 1) {
   if (ball.id === "kth" || ball.ultPrimed || ball.hp <= 0) return;
+  if (ball.id === "jo" && ball.joUltPending) return;
   if (ball.ultActive && ball.id !== "jo") return;
   ball.ultCharge = Math.min(ULT_MAX, ball.ultCharge + amount * ULT_GAIN_PER_POINT * multiplier);
   if (ball.ultCharge < ULT_MAX) return;
-  if (ball.id === "jo" && ball.joUltTimer > 0) {
+  if (ball.id === "jo" && ball.joUltLoopActive) {
     ball.joUltQueued = true;
     return;
   }
@@ -1630,8 +1674,11 @@ function addStatus(ball, type, duration) {
 
 function castJoUltimate(ball) {
   ball.ultCharge = 0;
-  ball.ultActive = true;
-  ball.joUltTimer = JO_ULT_DURATION;
+  if (ball.joUltPending || ball.joUltLoopActive) {
+    ball.joUltQueued = true;
+    return;
+  }
+  ball.joUltPending = true;
   burst(ball.x, ball.y, "#80cfa9", 42);
   addShockwave(ball.x, ball.y, ball.r + 180, "#80cfa9", 0.7, 12);
   playSound("joUlt");
@@ -1641,7 +1688,7 @@ function castParkUltimate(ball) {
   ball.ultCharge = 0;
   ball.ultActive = true;
   ball.parkUltTimer = PARK_ULT_DURATION;
-  ball.parkField = { x: ball.x, y: ball.y };
+  ball.parkField = {};
   burst(ball.x, ball.y, "#9b5de5", 60);
   addShockwave(ball.x, ball.y, PARK_ULT_RADIUS, "#9b5de5", 1.2, 20);
   screenFlash = 0.32;
@@ -1673,7 +1720,7 @@ function tryParkRevive(ball) {
   const previousMoney = ball.money;
   ball.money -= 10;
   applyParkMoneyState(ball, previousMoney);
-  ball.hp = ball.maxHp;
+  ball.hp = Math.min(100, ball.maxHp);
   resetReviveState(ball);
   ball.pendingDamageText.heal += ball.hp;
   ball.status = {};
@@ -1711,7 +1758,7 @@ function isHealingBlocked(target) {
       ball.parkUltTimer > 0 &&
       ball.parkField &&
       isEnemy(ball, target) &&
-      distance(ball.parkField, target) <= PARK_ULT_RADIUS + target.r,
+      distance(ball, target) <= PARK_ULT_RADIUS + target.r,
   );
 }
 
@@ -1769,11 +1816,23 @@ function bounceOnWalls(ball) {
 function checkWinner() {
   const alive = balls.filter((ball) => ball.hp > 0);
   if (alive.length > 1) return;
+  finishMatch(alive[0] || null, "elimination");
+}
+
+function resolveTimeLimitWinner() {
+  const highestHp = Math.max(...balls.map((ball) => Math.max(0, ball.hp)));
+  const leaders = balls.filter((ball) => Math.abs(Math.max(0, ball.hp) - highestHp) < 0.001);
+  finishMatch(leaders.length === 1 ? leaders[0] : null, "time");
+}
+
+function finishMatch(winner, reason) {
   state = "ended";
+  matchWinner = winner;
+  matchEndReason = reason;
   if (developerSimulation) return;
   stopBtn.textContent = "중단";
   countdownEl.classList.remove("hidden");
-  countdownEl.textContent = alive.length === 1 ? `${alive[0].name} 승리` : "무승부";
+  countdownEl.textContent = winner ? `${winner.name} 승리` : "무승부";
 }
 
 function renderScoreboard() {
@@ -2057,7 +2116,7 @@ function drawParkField(ball) {
   ctx.globalAlpha = 0.15;
   ctx.fillStyle = "#9b5de5";
   ctx.beginPath();
-  ctx.arc(ball.parkField.x, ball.parkField.y, PARK_ULT_RADIUS * pulse, 0, Math.PI * 2);
+  ctx.arc(ball.x, ball.y, PARK_ULT_RADIUS * pulse, 0, Math.PI * 2);
   ctx.fill();
   ctx.globalAlpha = 0.62;
   ctx.strokeStyle = "#c77dff";
@@ -2065,7 +2124,7 @@ function drawParkField(ball) {
   ctx.shadowBlur = 24;
   ctx.lineWidth = 8;
   ctx.beginPath();
-  ctx.arc(ball.parkField.x, ball.parkField.y, PARK_ULT_RADIUS * pulse, 0, Math.PI * 2);
+  ctx.arc(ball.x, ball.y, PARK_ULT_RADIUS * pulse, 0, Math.PI * 2);
   ctx.stroke();
   ctx.restore();
 }
@@ -2124,8 +2183,8 @@ function drawParkStealLink(ball) {
 }
 
 function drawJoKidneys(ball) {
-  const count = ball.joStage + 1;
-  const orbitRadius = ball.r + (ball.joUltTimer > 0 ? 145 : 72);
+  const count = getJoKidneyCount(ball);
+  const orbitRadius = ball.r + JO_ORBIT_RANGE_GAP;
   for (let index = 0; index < count; index += 1) {
     const angle = ball.joOrbitAngle + (Math.PI * 2 * index) / count;
     const x = ball.x + Math.cos(angle) * orbitRadius;
@@ -2133,8 +2192,8 @@ function drawJoKidneys(ball) {
     ctx.save();
     ctx.translate(x, y);
     ctx.rotate(angle + Math.PI / 2);
-    ctx.shadowColor = ball.joUltTimer > 0 ? "#ffffff" : "#80cfa9";
-    ctx.shadowBlur = ball.joUltTimer > 0 ? 22 : 10;
+    ctx.shadowColor = ball.joUltLoopActive ? "#ffffff" : "#80cfa9";
+    ctx.shadowBlur = ball.joUltLoopActive ? 22 : 14;
     if (kidneyImage.complete && kidneyImage.naturalWidth > 0) {
       ctx.drawImage(kidneyImage, -22, -22, 44, 44);
     } else {
@@ -2461,6 +2520,7 @@ function updateShockwaves(dt) {
 }
 
 function addShockwave(x, y, radius, color, life, width, options = {}) {
+  if (developerSimulation && !options.damage) return;
   shockwaves.push({ x, y, radius, color, life, width, age: 0, hitTargets: new Set(), ...options });
 }
 
@@ -2621,6 +2681,10 @@ function runDeveloperSimulation(fighterIds, options = {}) {
     damageTexts = [];
     screenShake = 0;
     screenFlash = 0;
+    matchElapsed = 0;
+    matchTimeLimit = maxSeconds;
+    matchWinner = null;
+    matchEndReason = null;
     state = "fighting";
 
     for (const ball of balls) {
@@ -2638,16 +2702,20 @@ function runDeveloperSimulation(fighterIds, options = {}) {
 
     const alive = balls.filter((ball) => ball.hp > 0);
     return {
-      winner: state === "ended" && alive.length === 1 ? alive[0].id : null,
-      draw: state !== "ended" || alive.length !== 1,
+      winner: matchWinner?.id || null,
+      draw: !matchWinner,
       duration: steps * dt,
-      timedOut: state !== "ended",
+      timedOut: matchEndReason === "time",
       survivors: alive.map((ball) => ball.id),
       finalHp: balls.map((ball) => ({ id: ball.id, hp: Math.max(0, ball.hp), shield: Math.max(0, ball.shield) })),
     };
   } finally {
     Math.random = previousRandom;
     developerSimulation = false;
+    matchElapsed = 0;
+    matchTimeLimit = MATCH_TIME_LIMIT;
+    matchWinner = null;
+    matchEndReason = null;
     state = "home";
   }
 }

@@ -183,14 +183,15 @@ if (!isMainThread) {
   };
   const mode = readArg("--mode", "1v1");
   if (!new Set(["1v1", "1v1v1"]).has(mode)) throw new Error("--mode must be 1v1 or 1v1v1");
+  const availableWorkers = Math.max(1, os.availableParallelism() - 1);
   const options = {
     runs: Math.max(1, Number.parseInt(readArg("--runs", "1000"), 10)),
-    workers: Math.max(1, Number.parseInt(readArg("--workers", "2"), 10)),
+    workers: Math.max(1, Number.parseInt(readArg("--workers", String(availableWorkers)), 10)),
     tickRate: Math.max(10, Number.parseInt(readArg("--tick-rate", "30"), 10)),
     maxSeconds: Math.max(10, Number.parseInt(readArg("--max-seconds", "300"), 10)),
     seed: Number.parseInt(readArg("--seed", "20260611"), 10),
   };
-  options.workers = Math.min(options.workers, Math.max(1, os.availableParallelism() - 1));
+  options.workers = Math.min(options.workers, availableWorkers);
 
   const metadataEngine = loadEngine();
   const fighterIds = metadataEngine.fighterIds;
