@@ -51,6 +51,22 @@ const SHANGLIN_BASE_DAMAGE = 20;
 const SHANGLIN_MAX_STACKS = 6;
 const SHANGLIN_STACK_DURATION = 5;
 const SHANGLIN_STACK_FALLOFF = 0.2;
+const KTH_SKILL_COOLDOWN = 10;
+const KTH_SKILL_CAST_TIME = 0.5;
+const KTH_SKILL_DAMAGE_RATIO = 0.12;
+const KTH_SKILL_STUN_DURATIONS = [1, 1.5, 2];
+const KTH_SKILL_RANGE_GAPS = [160, 220, 300];
+const KTH_ULT_INTERVAL = 30;
+const KTH_EVOLVE_CAST_TIME = 1;
+const KTH_HEAL_CAST_TIME = 0.5;
+const JO_STAGE_DURATIONS = [9, 7, 5, 3, 1];
+const JO_KIDNEY_DAMAGE = 15;
+const JO_KIDNEY_HIT_COOLDOWN = 0.5;
+const JO_ULT_DURATION = 10;
+const PARK_BASE_SKILL_COOLDOWN = 5;
+const PARK_SKILL_CAST_TIME = 0.3;
+const PARK_ULT_DURATION = 15;
+const PARK_ULT_RADIUS = 500;
 
 const fighters = {
   kim: {
@@ -109,6 +125,40 @@ const fighters = {
     speed: 320,
     skill: "접촉 공격 적중 시 최대 6중첩. 중첩마다 공격력이 50% 증가하고 최대 중첩에서 이동속도 50 증가.",
     ult: "체력 50의 분신을 소환하며, 분신과 본체가 중첩을 공유.",
+  },
+  kth: {
+    id: "kth",
+    name: "김태현",
+    color: "#d89b5b",
+    imageSrc: "kth.png",
+    tags: ["탱커", "왕귀", "체력 회복"],
+    maxHp: 250,
+    speed: 200,
+    startingShield: 100,
+    skill: "10초마다 0.5초 준비 후 주변을 내려쳐 최대 체력의 12% 피해와 진화 단계별 1/1.5/2초 기절.",
+    ult: "30초마다 최대 두 번 체력과 크기가 진화하며, 이후에는 30초마다 체력 50 회복.",
+  },
+  jo: {
+    id: "jo",
+    name: "조망",
+    color: "#80cfa9",
+    imageSrc: "wang.png",
+    tags: ["원거리 딜러", "지속 전투"],
+    maxHp: 200,
+    speed: 300,
+    skill: "주변을 도는 콩팥이 주기적으로 1개에서 5개까지 증가하며 접촉한 적에게 15 피해.",
+    ult: "10초 동안 콩팥의 공전 범위와 속도가 증가.",
+  },
+  park: {
+    id: "park",
+    name: "박예찬",
+    color: "#d7b4ff",
+    imageSrc: "pyc.png",
+    tags: ["왕귀", "원거리 공격"],
+    maxHp: 200,
+    speed: 200,
+    skill: "5초마다 무작위 적에게 피해를 주고 1원을 획득하며 보유 금액에 따라 성장.",
+    ult: "주변 500px에 15초간 둔화, 약화, 회복 불가 영역을 전개.",
   },
 };
 
@@ -176,6 +226,8 @@ function initAudio() {
   };
   document.documentElement.dataset.audioState = audioCtx.state;
 }
+const kidneyImage = new Image();
+kidneyImage.src = "kidney.png";
 
 async function ensureAudio() {
   initAudio();
@@ -245,6 +297,14 @@ function getFallbackSoundUrl(name) {
     letterUlt: [1200, 0.09, 0.42],
     stun: [680, 0.18, 0.4],
     death: [70, 0.32, 0.62],
+    kthSlam: [85, 0.3, 0.58],
+    kthEvolve: [120, 0.7, 0.62],
+    kthHeal: [680, 0.4, 0.42],
+    kidneyHit: [240, 0.1, 0.34],
+    joUlt: [310, 0.45, 0.48],
+    parkSteal: [980, 0.16, 0.42],
+    parkUlt: [62, 0.8, 0.66],
+    parkRevive: [420, 0.75, 0.62],
     unmute: [760, 0.14, 0.36],
   }[name] || [440, 0.1, 0.32];
   fallbackSoundUrls[name] = createToneWavUrl(...settings);
@@ -398,6 +458,23 @@ function playSound(name) {
     playNoise({ duration: 0.3, volume: 0.42, filter: 1100 });
     playTone({ freq: 160, endFreq: 42, duration: 0.38, type: "sawtooth", volume: 0.38 });
   }
+  if (name === "kthSlam") {
+    playNoise({ duration: 0.24, volume: 0.42, filter: 620 });
+    playTone({ freq: 95, endFreq: 45, duration: 0.32, type: "sine", volume: 0.4 });
+  }
+  if (name === "kthEvolve") {
+    playTone({ freq: 90, endFreq: 620, duration: 0.85, type: "sawtooth", volume: 0.32 });
+    playNoise({ duration: 0.55, volume: 0.28, filter: 1500 });
+  }
+  if (name === "kthHeal") playTone({ freq: 420, endFreq: 920, duration: 0.45, type: "sine", volume: 0.26 });
+  if (name === "kidneyHit") playTone({ freq: 260, endFreq: 170, duration: 0.09, type: "triangle", volume: 0.16 });
+  if (name === "joUlt") playTone({ freq: 220, endFreq: 760, duration: 0.5, type: "sawtooth", volume: 0.24 });
+  if (name === "parkSteal") playTone({ freq: 760, endFreq: 1260, duration: 0.14, type: "square", volume: 0.18 });
+  if (name === "parkUlt") {
+    playTone({ freq: 72, endFreq: 38, duration: 1, type: "sawtooth", volume: 0.42 });
+    playNoise({ duration: 0.7, volume: 0.34, filter: 900 });
+  }
+  if (name === "parkRevive") playTone({ freq: 180, endFreq: 1100, duration: 0.9, type: "sawtooth", volume: 0.34 });
   if (name === "damage") playTone({ freq: 180, endFreq: 120, duration: 0.07, type: "triangle", volume: 0.11 });
   if (name === "shieldBreak") {
     playNoise({ duration: 0.16, volume: 0.28, filter: 2200 });
@@ -483,7 +560,7 @@ function makeBall(fighterId, x, y) {
     needleSpin: (Math.random() > 0.5 ? 1 : -1) * (2.4 + Math.random() * 2.4),
     hitCooldown: 0,
     empowered: false,
-    skillTimer: data.id === "kim" || data.id === "bjd" ? 0 : 1,
+    skillTimer: ["kim", "bjd", "kth", "park"].includes(data.id) ? 0 : 1,
     drinkFlash: 0,
     letters: [],
     letterTimer: 0,
@@ -501,6 +578,26 @@ function makeBall(fighterId, x, y) {
     stacks: 0,
     stackTimer: 0,
     stackFalloffTimer: 0,
+    kthEvolution: 0,
+    kthCastType: null,
+    kthCastTimer: 0,
+    kthSavedVelocity: null,
+    joStage: 0,
+    joStageTimer: JO_STAGE_DURATIONS[0],
+    joOrbitAngle: 0,
+    joKidneyHits: new Map(),
+    joUltTimer: 0,
+    joUltQueued: false,
+    money: 0,
+    moneyLost: 0,
+    parkAttackBonus: 0,
+    parkLifeSteal: 0,
+    parkRevived: false,
+    parkCastTimer: 0,
+    parkCastTarget: null,
+    parkSavedVelocity: null,
+    parkUltTimer: 0,
+    parkField: null,
     teamOwner: null,
     pendingDamageText: { damage: 0, heal: 0 },
     status: {},
@@ -683,13 +780,24 @@ function update(dt) {
     updateLsjBurst(ball, dt);
     updateBjdUltimateCast(ball, dt);
     updateShanglin(ball, dt);
+    updateKthCast(ball, dt);
+    updateKthAbility(ball, dt);
+    updateJoAbility(ball, dt);
+    updateParkCast(ball, dt);
+    updateParkUltimate(ball, dt);
     if (canAct(ball)) {
       updateKimAbility(ball, dt);
       updateBjdAbility(ball, dt);
       updateLsjAbility(ball, dt);
+      updateParkAbility(ball, dt);
     }
     updateLeeUltimate(ball, dt);
-    if ((ball.id === "lee" && ball.ultActive) || ball.bjdUltCastTimer > 0) continue;
+    if (
+      (ball.id === "lee" && ball.ultActive) ||
+      ball.bjdUltCastTimer > 0 ||
+      ball.kthCastTimer > 0 ||
+      ball.parkCastTimer > 0
+    ) continue;
     if (canMove(ball)) {
       const slow = getSlowMultiplier(ball);
       ball.x += ball.vx * dt * slow;
@@ -701,6 +809,7 @@ function update(dt) {
   updateSummons(dt);
 
   updateLeeAura(dt);
+  updateParkFields();
   resolveBallHits();
   syncHud();
   checkWinner();
@@ -903,6 +1012,243 @@ function resolveBallHits() {
   }
 }
 
+function updateKthAbility(ball, dt) {
+  if (ball.id !== "kth" || ball.kthCastTimer > 0) return;
+  ball.ultCharge = Math.min(ULT_MAX, ball.ultCharge + (dt / KTH_ULT_INTERVAL) * ULT_MAX);
+  if (ball.ultCharge >= ULT_MAX && canAct(ball)) {
+    beginKthCast(ball, ball.kthEvolution < 2 ? "evolve" : "heal");
+    return;
+  }
+  if (!canAct(ball)) return;
+  ball.skillTimer += dt;
+  if (ball.skillTimer >= KTH_SKILL_COOLDOWN) beginKthCast(ball, "skill");
+}
+
+function beginKthCast(ball, type) {
+  ball.kthCastType = type;
+  ball.kthCastTimer = type === "skill" ? KTH_SKILL_CAST_TIME : type === "evolve" ? KTH_EVOLVE_CAST_TIME : KTH_HEAL_CAST_TIME;
+  ball.kthSavedVelocity = { vx: ball.vx, vy: ball.vy };
+  ball.vx = 0;
+  ball.vy = 0;
+  if (type !== "skill") burst(ball.x, ball.y, "#fff1b8", 34);
+}
+
+function updateKthCast(ball, dt) {
+  if (ball.id !== "kth" || ball.kthCastTimer <= 0) return;
+  ball.kthCastTimer = Math.max(0, ball.kthCastTimer - dt);
+  ball.vx = 0;
+  ball.vy = 0;
+  if (ball.kthCastTimer > 0) return;
+  const type = ball.kthCastType;
+  ball.kthCastType = null;
+  if (type === "skill") releaseKthSkill(ball);
+  if (type === "evolve") evolveKth(ball);
+  if (type === "heal") healKth(ball);
+  restoreKthVelocity(ball);
+}
+
+function restoreKthVelocity(ball) {
+  if (ball.kthSavedVelocity && Math.hypot(ball.kthSavedVelocity.vx, ball.kthSavedVelocity.vy) > 0) {
+    ball.vx = ball.kthSavedVelocity.vx;
+    ball.vy = ball.kthSavedVelocity.vy;
+    setVelocityMagnitude(ball, ball.speed);
+  } else {
+    const angle = randomAngle();
+    ball.vx = Math.cos(angle) * ball.speed;
+    ball.vy = Math.sin(angle) * ball.speed;
+  }
+  ball.kthSavedVelocity = null;
+}
+
+function releaseKthSkill(ball) {
+  ball.skillTimer = 0;
+  const radius = getKthSkillRadius(ball);
+  const damage = ball.maxHp * KTH_SKILL_DAMAGE_RATIO;
+  const stunDuration = KTH_SKILL_STUN_DURATIONS[ball.kthEvolution];
+  const isComplete = ball.kthEvolution >= 2;
+  burst(ball.x, ball.y, isComplete ? "#fff1b8" : "#ff6b5f", isComplete ? 90 : 48);
+  for (const target of combatants()) {
+    if (!isEnemy(ball, target) || target.hp <= 0 || distance(ball, target) > radius + target.r) continue;
+    applyDamage(target, damage, { source: ball });
+    addStatus(target, "stun", stunDuration);
+  }
+  screenShake = Math.max(screenShake, isComplete ? 0.65 : 0.4);
+  playSound("kthSlam");
+}
+
+function getKthSkillRadius(ball) {
+  return ball.r + KTH_SKILL_RANGE_GAPS[ball.kthEvolution];
+}
+
+function evolveKth(ball) {
+  ball.ultCharge = 0;
+  ball.kthEvolution += 1;
+  ball.maxHp *= 2;
+  ball.hp = Math.min(ball.maxHp, ball.hp * 2);
+  ball.r *= 2;
+  ball.x = clamp(ball.x, ball.r, ARENA_SIZE - ball.r);
+  ball.y = clamp(ball.y, ball.r, ARENA_SIZE - ball.r);
+  burst(ball.x, ball.y, "#ffd166", 64);
+  addShockwave(ball.x, ball.y, ball.r * 2.5, "#ffd166", 0.8, 18);
+  screenFlash = 0.4;
+  screenShake = 0.5;
+  playSound("kthEvolve");
+}
+
+function healKth(ball) {
+  ball.ultCharge = 0;
+  applyHeal(ball, 50, { fromUltimate: true });
+  burst(ball.x, ball.y, "#69de93", 36);
+  addShockwave(ball.x, ball.y, ball.r + 70, "#69de93", 0.55, 10);
+  playSound("kthHeal");
+}
+
+function updateJoAbility(ball, dt) {
+  if (ball.id !== "jo") return;
+  ball.joStageTimer -= dt;
+  while (ball.joStageTimer <= 0) {
+    ball.joStage = (ball.joStage + 1) % JO_STAGE_DURATIONS.length;
+    ball.joStageTimer += JO_STAGE_DURATIONS[ball.joStage];
+  }
+  if (ball.joUltTimer > 0) {
+    ball.joUltTimer = Math.max(0, ball.joUltTimer - dt);
+    if (ball.joUltTimer <= 0) {
+      ball.ultActive = false;
+      if (ball.joUltQueued) {
+        ball.joUltQueued = false;
+        castJoUltimate(ball);
+      }
+    }
+  }
+  const orbitSpeed = ball.joUltTimer > 0 ? 5.2 : 2.6;
+  ball.joOrbitAngle += orbitSpeed * dt;
+  for (const [target, cooldown] of ball.joKidneyHits) {
+    const next = cooldown - dt;
+    if (next <= 0 || target.hp <= 0) ball.joKidneyHits.delete(target);
+    else ball.joKidneyHits.set(target, next);
+  }
+  const count = ball.joStage + 1;
+  const orbitRadius = ball.r + (ball.joUltTimer > 0 ? 145 : 72);
+  if (!canAct(ball)) return;
+  for (let index = 0; index < count; index += 1) {
+    const angle = ball.joOrbitAngle + (Math.PI * 2 * index) / count;
+    const kidney = { x: ball.x + Math.cos(angle) * orbitRadius, y: ball.y + Math.sin(angle) * orbitRadius, r: 18 };
+    for (const target of combatants()) {
+      if (!isEnemy(ball, target) || target.hp <= 0 || ball.joKidneyHits.has(target)) continue;
+      if (distance(kidney, target) > kidney.r + target.r) continue;
+      applyDamage(target, JO_KIDNEY_DAMAGE, { source: ball });
+      ball.joKidneyHits.set(target, JO_KIDNEY_HIT_COOLDOWN);
+      burst(kidney.x, kidney.y, "#80cfa9", 12);
+      playSound("kidneyHit");
+    }
+  }
+}
+
+function updateParkAbility(ball, dt) {
+  if (ball.id !== "park" || ball.parkCastTimer > 0) return;
+  ball.skillTimer += dt;
+  const cooldown = getParkSkillCooldown(ball);
+  if (ball.skillTimer < cooldown) return;
+  const enemies = balls.filter((target) => isEnemy(ball, target) && target.hp > 0);
+  if (!enemies.length) return;
+  const target = enemies[Math.floor(Math.random() * enemies.length)];
+  beginParkCast(ball, target);
+}
+
+function beginParkCast(ball, target) {
+  ball.skillTimer = 0;
+  ball.parkCastTimer = PARK_SKILL_CAST_TIME;
+  ball.parkCastTarget = target;
+  ball.parkSavedVelocity = { vx: ball.vx, vy: ball.vy };
+  ball.vx = 0;
+  ball.vy = 0;
+  addShockwave(ball.x, ball.y, ball.r + 28, "#d7b4ff", PARK_SKILL_CAST_TIME, 6);
+}
+
+function updateParkCast(ball, dt) {
+  if (ball.id !== "park" || ball.parkCastTimer <= 0) return;
+  ball.parkCastTimer = Math.max(0, ball.parkCastTimer - dt);
+  ball.vx = 0;
+  ball.vy = 0;
+  if (ball.parkCastTimer > 0) return;
+
+  const target = ball.parkCastTarget;
+  ball.parkCastTarget = null;
+  restoreParkVelocity(ball);
+  if (!target || target.hp <= 0 || target.eliminated || !isEnemy(ball, target)) return;
+
+  const damage = 20 + ball.parkAttackBonus;
+  const result = applyDamage(target, damage, { source: ball });
+  target.moneyLost = (target.moneyLost || 0) + 1;
+  const previousMoney = ball.money;
+  ball.money += 1;
+  applyParkMoneyState(ball, previousMoney);
+  if (ball.parkLifeSteal > 0 && result.totalDamage > 0) applyHeal(ball, result.totalDamage * ball.parkLifeSteal, { fromUltimate: true });
+  addShockwave(target.x, target.y, target.r + 30, "#d7b4ff", 0.35, 8);
+  burst(ball.x, ball.y, "#ffd166", 18);
+  playSound("parkSteal");
+}
+
+function restoreParkVelocity(ball) {
+  if (ball.parkSavedVelocity && Math.hypot(ball.parkSavedVelocity.vx, ball.parkSavedVelocity.vy) > 0) {
+    ball.vx = ball.parkSavedVelocity.vx;
+    ball.vy = ball.parkSavedVelocity.vy;
+    setVelocityMagnitude(ball, ball.speed);
+  } else {
+    const angle = randomAngle();
+    ball.vx = Math.cos(angle) * ball.speed;
+    ball.vy = Math.sin(angle) * ball.speed;
+  }
+  ball.parkSavedVelocity = null;
+}
+
+function getParkSkillCooldown(ball) {
+  return Math.max(1, PARK_BASE_SKILL_COOLDOWN - (ball.money >= 7 ? 1 : 0) - (ball.money >= 20 ? 1 : 0));
+}
+
+function getParkBuffLabels(ball) {
+  const buffs = [];
+  if (ball.money >= 1) buffs.push("이동속도 +100");
+  if (ball.parkAttackBonus > 0) buffs.push(`공격력 +${ball.parkAttackBonus}`);
+  if (ball.money >= 5) buffs.push("5원 보상: 체력 100 회복");
+  const cooldownReduction = PARK_BASE_SKILL_COOLDOWN - getParkSkillCooldown(ball);
+  if (cooldownReduction > 0) buffs.push(`스킬 쿨타임 -${cooldownReduction}초`);
+  if (ball.parkLifeSteal > 0) buffs.push("생명력 흡수 50%");
+  if (ball.maxHp > fighters.park.maxHp) buffs.push(`최대 체력 +${ball.maxHp - fighters.park.maxHp}`);
+  if (ball.money >= 10 && !ball.parkRevived) buffs.push("부활 가능");
+  return buffs.length ? buffs : ["활성 버프 없음"];
+}
+
+function applyParkMoneyState(ball, previousMoney = ball.money) {
+  const previousMaxHp = ball.maxHp;
+  ball.speed = fighters.park.speed + (ball.money >= 1 ? 100 : 0);
+  ball.parkAttackBonus = (ball.money >= 3 ? 10 : 0) + (ball.money >= 10 ? 10 : 0) + (ball.money >= 30 ? 100 : 0);
+  ball.parkLifeSteal = ball.money >= 15 ? 0.5 : 0;
+  ball.maxHp = fighters.park.maxHp + (ball.money >= 15 ? 50 : 0);
+  if (previousMoney < 5 && ball.money >= 5) applyHeal(ball, 100, { fromUltimate: true });
+  if (ball.maxHp < previousMaxHp) ball.hp = Math.min(ball.hp, ball.maxHp);
+  if (Math.hypot(ball.vx, ball.vy) > 0) setVelocityMagnitude(ball, ball.speed);
+}
+
+function updateParkUltimate(ball, dt) {
+  if (ball.id !== "park" || ball.parkUltTimer <= 0) return;
+  ball.parkUltTimer = Math.max(0, ball.parkUltTimer - dt);
+  if (ball.parkUltTimer <= 0) {
+    ball.ultActive = false;
+    ball.parkField = null;
+  }
+}
+
+function updateParkFields() {
+  for (const park of balls.filter((ball) => ball.id === "park" && ball.parkUltTimer > 0 && ball.parkField)) {
+    for (const target of combatants()) {
+      if (!isEnemy(park, target) || target.hp <= 0 || distance(park.parkField, target) > PARK_ULT_RADIUS + target.r) continue;
+      target.status.parkFieldSlow = 0.08;
+      target.status.weakened = Math.max(target.status.weakened || 0, 0.08);
+    }
+  }
+}
+
 function resolveMainBallHit(a, b) {
   const dx = b.x - a.x;
   const dy = b.y - a.y;
@@ -1011,12 +1357,13 @@ function applyDamage(target, amount, options = {}) {
     gainUltimate(options.source.teamOwner || options.source, totalDamage, options.ultGainMultiplier);
   }
 
-  if (target.hp <= 0 && !target.eliminated) eliminateBall(target);
+  if (target.hp <= 0 && !target.eliminated && !tryParkRevive(target)) eliminateBall(target);
 
   return { shieldDamage, hpDamage, totalDamage };
 }
 
 function applyHeal(target, amount, options = {}) {
+  if (isHealingBlocked(target)) return 0;
   const beforeHp = target.hp;
   target.hp = Math.min(target.maxHp, target.hp + amount);
   const healed = target.hp - beforeHp;
@@ -1029,9 +1376,14 @@ function applyHeal(target, amount, options = {}) {
 }
 
 function gainUltimate(ball, amount, multiplier = 1) {
-  if (ball.ultActive || ball.ultPrimed || ball.hp <= 0) return;
+  if (ball.id === "kth" || ball.ultPrimed || ball.hp <= 0) return;
+  if (ball.ultActive && ball.id !== "jo") return;
   ball.ultCharge = Math.min(ULT_MAX, ball.ultCharge + amount * ULT_GAIN_PER_POINT * multiplier);
   if (ball.ultCharge < ULT_MAX) return;
+  if (ball.id === "jo" && ball.joUltTimer > 0) {
+    ball.joUltQueued = true;
+    return;
+  }
   if (ball.id === "lsj") {
     ball.ultReady = true;
     if (!ball.letterBurstQueue.length) beginLsjUltimateCollection(ball);
@@ -1047,6 +1399,8 @@ function castUltimate(ball) {
   if (ball.id === "bjd") castBjdUltimate(ball);
   if (ball.id === "lsj") castLsjUltimate(ball);
   if (ball.id === "shanglin") castShanglinUltimate(ball);
+  if (ball.id === "jo") castJoUltimate(ball);
+  if (ball.id === "park") castParkUltimate(ball);
 }
 
 function castKimUltimate(ball) {
@@ -1274,6 +1628,27 @@ function addStatus(ball, type, duration) {
   playSound(type === "stun" ? "stun" : "damage");
 }
 
+function castJoUltimate(ball) {
+  ball.ultCharge = 0;
+  ball.ultActive = true;
+  ball.joUltTimer = JO_ULT_DURATION;
+  burst(ball.x, ball.y, "#80cfa9", 42);
+  addShockwave(ball.x, ball.y, ball.r + 180, "#80cfa9", 0.7, 12);
+  playSound("joUlt");
+}
+
+function castParkUltimate(ball) {
+  ball.ultCharge = 0;
+  ball.ultActive = true;
+  ball.parkUltTimer = PARK_ULT_DURATION;
+  ball.parkField = { x: ball.x, y: ball.y };
+  burst(ball.x, ball.y, "#9b5de5", 60);
+  addShockwave(ball.x, ball.y, PARK_ULT_RADIUS, "#9b5de5", 1.2, 20);
+  screenFlash = 0.32;
+  screenShake = 0.5;
+  playSound("parkUlt");
+}
+
 function eliminateBall(ball) {
   ball.eliminated = true;
   ball.hp = 0;
@@ -1292,6 +1667,30 @@ function eliminateBall(ball) {
   playSound("death");
 }
 
+function tryParkRevive(ball) {
+  if (ball.id !== "park" || ball.parkRevived || ball.money < 10) return false;
+  ball.parkRevived = true;
+  const previousMoney = ball.money;
+  ball.money -= 10;
+  applyParkMoneyState(ball, previousMoney);
+  ball.hp = ball.maxHp;
+  resetReviveState(ball);
+  ball.pendingDamageText.heal += ball.hp;
+  ball.status = {};
+  ball.parkUltTimer = 0;
+  ball.parkField = null;
+  ball.ultActive = false;
+  burst(ball.x, ball.y, "#ffffff", 70);
+  addShockwave(ball.x, ball.y, ball.r * 3, "#d7b4ff", 0.9, 18);
+  screenFlash = 0.45;
+  playSound("parkRevive");
+  return true;
+}
+
+function resetReviveState(ball) {
+  ball.moneyLost = 0;
+}
+
 function canAct(ball) {
   return !ball.status.stun && !ball.status.sleep;
 }
@@ -1301,7 +1700,26 @@ function canMove(ball) {
 }
 
 function getSlowMultiplier(ball) {
+  if (ball.status.parkFieldSlow) return 0.2;
   return ball.status.slow ? 0.5 : 1;
+}
+
+function isHealingBlocked(target) {
+  return balls.some(
+    (ball) =>
+      ball.id === "park" &&
+      ball.parkUltTimer > 0 &&
+      ball.parkField &&
+      isEnemy(ball, target) &&
+      distance(ball.parkField, target) <= PARK_ULT_RADIUS + target.r,
+  );
+}
+
+function isEnemy(source, target) {
+  if (!source || !target || source === target) return false;
+  const sourceOwner = source.teamOwner || source;
+  const targetOwner = target.teamOwner || target;
+  return sourceOwner !== targetOwner;
 }
 
 function applyDamageModifiers(source, target, amount) {
@@ -1369,7 +1787,7 @@ function renderScoreboard() {
         <h2 style="color:${ball.color}">${ball.name}</h2>
         <p class="shield-label">SHIELD <span id="shield-${index}">${Math.ceil(ball.shield)}</span></p>
         <div class="shield-bar"><span id="shield-fill-${index}"></span></div>
-        <p>HP <span id="hp-${index}">${Math.round(ball.hp)}</span> / ${ball.maxHp}</p>
+        <p>HP <span id="hp-${index}">${Math.round(ball.hp)}</span> / <span id="max-hp-${index}">${ball.maxHp}</span></p>
       </div>
       <meter id="meter-${index}" min="0" max="${ball.maxHp}" value="${ball.hp}"></meter>
       <p>ULT <span id="ult-${index}">${Math.round(ball.ultCharge)}</span>%</p>
@@ -1379,6 +1797,15 @@ function renderScoreboard() {
           ? `<div class="summon-hud hidden" id="summon-hud-${index}">
               <p id="summon-count-${index}">분신 x0</p>
               <div class="summon-list" id="summon-list-${index}"></div>
+            </div>`
+          : ""
+      }
+      ${
+        ball.id === "park"
+          ? `<div class="park-buff-hud">
+              <p>보유 금액 <strong id="money-${index}">0원</strong></p>
+              <p class="park-buff-title">돈 버프</p>
+              <div class="park-buff-list" id="park-buffs-${index}"></div>
             </div>`
           : ""
       }
@@ -1395,12 +1822,24 @@ function syncHud() {
   if (developerSimulation) return;
   balls.forEach((ball, index) => {
     document.getElementById(`hp-${index}`).textContent = Math.ceil(ball.hp);
+    document.getElementById(`max-hp-${index}`).textContent = Math.ceil(ball.maxHp);
+    document.getElementById(`meter-${index}`).max = ball.maxHp;
     document.getElementById(`meter-${index}`).value = ball.hp;
     document.getElementById(`shield-${index}`).textContent = Math.ceil(ball.shield);
     document.getElementById(`shield-fill-${index}`).style.width = `${Math.min(100, (ball.shield / ball.maxHp) * 100)}%`;
     document.getElementById(`ult-${index}`).textContent = Math.round(ball.ultCharge);
     document.getElementById(`ult-meter-${index}`).value = ball.ultCharge;
     document.getElementById(`speed-${index}`).textContent = Math.round(ball.speed);
+    if (ball.id === "park") {
+      document.getElementById(`money-${index}`).textContent = `${ball.money}원`;
+      const buffHud = document.getElementById(`park-buffs-${index}`);
+      const buffs = getParkBuffLabels(ball);
+      const buffState = buffs.join("|");
+      if (buffHud.dataset.state !== buffState) {
+        buffHud.dataset.state = buffState;
+        buffHud.innerHTML = buffs.map((buff) => `<span class="park-buff">${buff}</span>`).join("");
+      }
+    }
     if (ball.id === "shanglin") {
       const activeSummons = summons.filter((item) => item.teamOwner === ball && item.hp > 0);
       const summonHud = document.getElementById(`summon-hud-${index}`);
@@ -1436,11 +1875,25 @@ function draw() {
     if (!ball.eliminated && ball.id === "lee" && ball.ultActive) drawLeeUltimateField(ball);
   }
   for (const ball of balls) {
+    if (!ball.eliminated && ball.id === "park" && ball.parkUltTimer > 0 && ball.parkField) drawParkField(ball);
+  }
+  for (const ball of balls) {
     if (!ball.eliminated && ball.id === "lee" && !ball.ultActive && canAct(ball)) drawAura(ball);
+  }
+  for (const ball of balls) {
+    if (!ball.eliminated && ball.id === "kth" && ball.kthCastType === "skill" && ball.kthCastTimer > 0) {
+      drawKthSkillTelegraph(ball);
+    }
   }
   for (const shockwave of shockwaves) drawShockwave(shockwave);
   for (const projectile of projectiles) drawProjectile(projectile);
+  for (const ball of balls) {
+    if (!ball.eliminated && ball.id === "park" && ball.parkCastTimer > 0) drawParkStealLink(ball);
+  }
   for (const particle of particles) drawParticle(particle);
+  for (const ball of balls) {
+    if (!ball.eliminated && ball.id === "jo") drawJoKidneys(ball);
+  }
   for (const ball of balls) drawBall(ball);
   for (const summon of summons) drawBall(summon);
   for (const text of damageTexts) drawDamageText(text);
@@ -1526,6 +1979,8 @@ function drawBall(ball) {
   drawOrbitingLetters(ball);
   drawStatusLabels(ball);
   drawShanglinInfo(ball);
+  drawKthInfo(ball);
+  drawMoneyInfo(ball);
 
   if (ball.damageImmuneTimer > 0) {
     ctx.save();
@@ -1540,6 +1995,35 @@ function drawBall(ball) {
   }
 
   if (state === "countdown") drawNeedle(ball);
+}
+
+function drawKthSkillTelegraph(ball) {
+  const radius = getKthSkillRadius(ball);
+  const progress = clamp(1 - ball.kthCastTimer / KTH_SKILL_CAST_TIME, 0, 1);
+  const pulse = 0.96 + Math.sin(performance.now() / 55) * 0.015;
+  const warningRadius = radius * (1.12 - progress * 0.12);
+
+  ctx.save();
+  ctx.fillStyle = `rgba(220, 35, 35, ${0.16 + progress * 0.2})`;
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, radius * pulse, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = `rgba(255, 72, 64, ${0.62 + progress * 0.38})`;
+  ctx.lineWidth = ball.kthEvolution >= 2 ? 12 : 8;
+  ctx.shadowColor = "#ff3028";
+  ctx.shadowBlur = 12 + progress * 20;
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, warningRadius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  ctx.globalAlpha = 0.45 + progress * 0.45;
+  ctx.lineWidth = 4;
+  ctx.setLineDash([18, 12]);
+  ctx.beginPath();
+  ctx.arc(ball.x, ball.y, radius * 0.72, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * progress);
+  ctx.stroke();
+  ctx.restore();
 }
 
 function drawDestroyedBall(ball) {
@@ -1565,6 +2049,102 @@ function drawDestroyedBall(ball) {
     ctx.stroke();
   }
   ctx.restore();
+}
+
+function drawParkField(ball) {
+  const pulse = 0.92 + Math.sin(performance.now() / 180) * 0.03;
+  ctx.save();
+  ctx.globalAlpha = 0.15;
+  ctx.fillStyle = "#9b5de5";
+  ctx.beginPath();
+  ctx.arc(ball.parkField.x, ball.parkField.y, PARK_ULT_RADIUS * pulse, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.globalAlpha = 0.62;
+  ctx.strokeStyle = "#c77dff";
+  ctx.shadowColor = "#9b5de5";
+  ctx.shadowBlur = 24;
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.arc(ball.parkField.x, ball.parkField.y, PARK_ULT_RADIUS * pulse, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+function drawParkStealLink(ball) {
+  const target = ball.parkCastTarget;
+  if (!target || target.hp <= 0 || target.eliminated) return;
+  const progress = 1 - ball.parkCastTimer / PARK_SKILL_CAST_TIME;
+  const dx = target.x - ball.x;
+  const dy = target.y - ball.y;
+  const length = Math.hypot(dx, dy) || 1;
+  const nx = -dy / length;
+  const ny = dx / length;
+  const wave = Math.sin(progress * Math.PI * 5) * 8;
+  const midX = (ball.x + target.x) / 2 + nx * wave;
+  const midY = (ball.y + target.y) / 2 + ny * wave;
+
+  ctx.save();
+  ctx.globalCompositeOperation = "lighter";
+  ctx.lineCap = "round";
+  ctx.shadowColor = "#d7b4ff";
+  ctx.shadowBlur = 24;
+  ctx.strokeStyle = "rgba(155, 93, 229, 0.46)";
+  ctx.lineWidth = 16;
+  ctx.beginPath();
+  ctx.moveTo(ball.x, ball.y);
+  ctx.quadraticCurveTo(midX, midY, target.x, target.y);
+  ctx.stroke();
+  ctx.strokeStyle = "rgba(255, 235, 145, 0.95)";
+  ctx.lineWidth = 4 + progress * 3;
+  ctx.beginPath();
+  ctx.moveTo(ball.x, ball.y);
+  ctx.quadraticCurveTo(midX, midY, target.x, target.y);
+  ctx.stroke();
+
+  for (let index = 0; index < 5; index += 1) {
+    const t = (progress * 1.8 + index / 5) % 1;
+    const reverse = 1 - t;
+    const x = target.x * reverse * reverse + 2 * midX * reverse * t + ball.x * t * t;
+    const y = target.y * reverse * reverse + 2 * midY * reverse * t + ball.y * t * t;
+    ctx.fillStyle = index % 2 ? "#fff3a6" : "#d7b4ff";
+    ctx.beginPath();
+    ctx.arc(x, y, 4 + progress * 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.globalAlpha = 0.45 + progress * 0.4;
+  ctx.strokeStyle = "#f3dcff";
+  ctx.lineWidth = 5;
+  for (const entity of [ball, target]) {
+    ctx.beginPath();
+    ctx.arc(entity.x, entity.y, entity.r + 12 + progress * 5, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawJoKidneys(ball) {
+  const count = ball.joStage + 1;
+  const orbitRadius = ball.r + (ball.joUltTimer > 0 ? 145 : 72);
+  for (let index = 0; index < count; index += 1) {
+    const angle = ball.joOrbitAngle + (Math.PI * 2 * index) / count;
+    const x = ball.x + Math.cos(angle) * orbitRadius;
+    const y = ball.y + Math.sin(angle) * orbitRadius;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.rotate(angle + Math.PI / 2);
+    ctx.shadowColor = ball.joUltTimer > 0 ? "#ffffff" : "#80cfa9";
+    ctx.shadowBlur = ball.joUltTimer > 0 ? 22 : 10;
+    if (kidneyImage.complete && kidneyImage.naturalWidth > 0) {
+      ctx.drawImage(kidneyImage, -22, -22, 44, 44);
+    } else {
+      ctx.fillStyle = "#a6404a";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 13, 21, 0.35, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
 }
 
 function drawShanglinMaxStackAura(ball) {
@@ -1606,12 +2186,11 @@ function drawShanglinMaxStackAura(ball) {
 
 function drawStatusLabels(ball) {
   const labels = [];
-  if (ball.bjdUltCastTimer > 0) labels.push("시전!");
   if (ball.status.stun) labels.push("기절!");
   if (ball.status.vulnerable) labels.push("취약!");
   if (ball.status.weakened) labels.push("약화!");
   if (ball.status.root) labels.push("속박!");
-  if (ball.status.slow) labels.push("둔화!");
+  if (ball.status.slow || ball.status.parkFieldSlow) labels.push("둔화!");
   if (ball.status.sleep) labels.push("수면!");
   if (!labels.length) return;
 
@@ -1625,6 +2204,39 @@ function drawStatusLabels(ball) {
     ctx.strokeStyle = "#101216";
     ctx.strokeText(label, ball.x, y);
     ctx.fillStyle = "#ffd166";
+    ctx.fillText(label, ball.x, y);
+  });
+  ctx.restore();
+}
+
+function drawKthInfo(ball) {
+  if (ball.id !== "kth") return;
+  ctx.save();
+  ctx.font = "900 18px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = "#101216";
+  ctx.fillStyle = "#ffd166";
+  const label = ball.kthEvolution < 2 ? `진화 ${ball.kthEvolution}/2` : "완전체";
+  ctx.strokeText(label, ball.x, ball.y + ball.r + 25);
+  ctx.fillText(label, ball.x, ball.y + ball.r + 25);
+  ctx.restore();
+}
+
+function drawMoneyInfo(ball) {
+  if (ball.id !== "park" && !ball.moneyLost) return;
+  const labels = [];
+  if (ball.id === "park") labels.push(`+${ball.money}원`);
+  if (ball.moneyLost) labels.push(`-${ball.moneyLost}원`);
+  ctx.save();
+  ctx.font = "900 18px system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.lineWidth = 4;
+  labels.forEach((label, index) => {
+    const y = ball.y - ball.r - 24 - index * 20;
+    ctx.strokeStyle = "#101216";
+    ctx.fillStyle = label.startsWith("+") ? "#ffd166" : "#ff8f8f";
+    ctx.strokeText(label, ball.x, y);
     ctx.fillText(label, ball.x, y);
   });
   ctx.restore();
@@ -1717,6 +2329,9 @@ function drawSkillRing(ball) {
   if (ball.id === "kim") progress = ball.skillTimer / KIM_SKILL_COOLDOWN;
   if (ball.id === "bjd") progress = ball.skillTimer / BJD_SKILL_COOLDOWN;
   if (ball.id === "lsj") progress = ball.letters.length / LSJ_LETTERS.length;
+  if (ball.id === "kth") progress = ball.skillTimer / KTH_SKILL_COOLDOWN;
+  if (ball.id === "jo") progress = 1 - ball.joStageTimer / JO_STAGE_DURATIONS[ball.joStage];
+  if (ball.id === "park") progress = ball.skillTimer / getParkSkillCooldown(ball);
   ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
   ctx.lineWidth = 5;
   ctx.beginPath();
